@@ -31,17 +31,36 @@ FileDepot concerns three entites: *Locker, Package, and Policy*, in which:
 ## API
 FileDepot provides a set of RESTful APTs.
 
+### Login
+- `POST /login`: Login interface for the client App. If successfully logged in, then the session token is stored in the cookie.
+- `POST /logout`: Logout interface for the client App. Removes session token in the cookie.
+
 ### Locker
 - `GET /locker`: Returns the IDs of all lockers owned by the requesting App.
-- `POST /locker`: Reserves a locker under the name of the requesting App, and returns the locker ID. The payload of the POST request should specify the policy of this locker.
-- `GET /locker/:id`: If the locker is owned by the requesting App, then returns the status, the policy, and packages of the given locker.
-- `PUT /locker/:id`: Changes the given locker's policy. The payload should specify the delta of the updated policy.
-- `DELETE /locker/:id`: Deletes the given locker, and all its packages.
+- `POST /locker`: Reserves a locker under the name of the requesting App, and returns the locker ID.
+        The payload of the POST request should specify the policies and initial states of this locker.
+- `GET /locker/:id`: If the locker is owned by the requesting App, then returns the policies, states, and packages of the given locker.
+- `PUT /locker/:id`: Changes the given locker's policies and states.
+        The payload should specify **the delta** of the updated policies and states.
+        Typical usages of this API include lock or unlock a locker, or postpone expiration date.
+- `DELETE /locker/:id`: Deletes the given locker, and all packages of it.
 
 ### Package
-TODO
+- `GET /package`: Returns the IDs of all packages owned by the requesting App.
+- `POST /package/locker/:locker_id`: If the locker belongs to the client App, then Creates a package in the specific locker, and returns the package ID. 
+        The payload of this POST request should specify the policies and states of this locker.
+- `POST /package/:id`: Upload a file to the specific package.
+        The payload of the request is the file's content.
+- `GET /package/:id`: If the package is in a locker owned by the requesting App, then returns the policies, states, and files in the given locker.
+- `PUT /package/:id`: Changes the given package's policies and states.
+        The payload should specify **the delta** of the updated policies and states.
+        Typical usages of this API include lock or unlkock a package.
+- `DELETE /package/:id`: Deletes the given package.
 
 ### Policy
+TODO
+
+## Policies
 TODO
 
 ## Storage Backend
