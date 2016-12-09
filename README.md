@@ -22,11 +22,10 @@ In FileDepot's use case:
 
 ## Concepts 
 
-FileDepot concerns three entites: *Locker, Package, and Policy*, in which:
+FileDepot concerns two entites: *Locker, and Package*, in which:
 
 - Locker represents a reservation that the App requests for the user to upload files.
 - Package is a set of files a user uploads to a specific Locker in FileDepot.
-- Policy means the global or locker-specific policy, including expiration policy, access control policy, naming policy, file type policy, and so on.
 
 ## API
 FileDepot provides a set of RESTful APTs.
@@ -68,8 +67,13 @@ The request and response are in the form of JSON strings, except for the APIs ma
 - `DELETE /package/:id`: Deletes the given package.
 
 ## Policies and States
-As shown above, every locker and package
-TODO
+As shown above, every client, locker, and package has their own states and policies.
+
+A policy is a mapping of: states * operation -> updated-states * decision.
+
+A policy can be written in the form of Javascript.
+
+TODO: details
 
 ## Storage Backend
 FileDepot can be driven by local storage or cloud storage. In this version we use Amazon S3.
