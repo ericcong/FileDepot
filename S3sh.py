@@ -28,3 +28,19 @@ class S3sh(object):
             Body = "",
             Key = self.key_prefix + key
         )
+
+    def presigned_post(self, key, **kwargs):
+        conditions = list()
+        expires_in_sec = 3600
+        if "content_length_range" in kwargs:
+            conditions.append(["content-length-range", kwargs["content_length_range"][0], kwargs["content_length_range"][1]])
+        if "content_type" in kwargs:
+            conditions.append(["starts-with", "$Content-Type", kwargs["content_type"]])
+        if "expires_in_sec" in kwargs:
+            expires_in_sec = kwargs["expires_in_sec"]
+        return client.generate_presigned_post(
+            Bucket = self.bucket,
+            Key = self.key_prefix + key,
+            Conditions = conditions,
+            ExpiresIn = expires_in_sec
+        )
