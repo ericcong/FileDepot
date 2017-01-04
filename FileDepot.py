@@ -1,22 +1,17 @@
 import os
 import time
-import boto3
-import botocore
 import uuid
 import hashlib
 from flask import Flask, request
 from flask_restful import Resource, Api
+from S3sh import S3sh
 
 # Config
-bucket = "undergrad"
-key_prefix = "FileDepot/"
 session_expire_sec = 600
+s3sh = S3sh("undergrad", "FileDepot/")
 
 app = Flask(__name__)
 api = Api(app)
-
-s3 = boto3.resource("s3")
-client = boto3.client("s3")
 
 sessions = dict()
 
@@ -43,34 +38,14 @@ def delete_session(session_id):
 def get_session_id(request):
     return request.get_json(force=True)["session_id"]
 
-def has_key(key):
-    result = False
-    try:
-        s3.Object(bucket, key_prefix + key).load()
-    except botocore.exceptions.ClientError as e:
-        if e.response["Error"]["Code"] == "404":
-            result = False
-        else:
-            raise
-    else:
-        result = True
-    return result
-
-def touch(key):
-    return client.put_object(
-        Bucket = bucket,
-        Body = "",
-        Key = key_prefix + key
-    )
-
 class Login(Resource):
     def post(self):
         json_data = request.get_json(force=True)
         uid = hashlib.sha256((json_data["type"] + json_data["cred"]["id"]).encode("utf-8")).hexdigest()
         for i in ["locked/", "unlocked/"]:
             dir_key = i + uid + "/"
-            if not has_key(dir_key):
-                touch(dir_key)
+            if not s3sh.has(dir_key):
+                s3sh.touch(dir_key)
         return {"session_id": make_session(uid)}
 
 class Logout(Resource):
