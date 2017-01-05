@@ -24,11 +24,25 @@ In FileDepot's use case:
 ## Locker Entity
 A locker can be represented as such an entity:
 ```
-id: UUID, 32-bytes.
-uid: UUID, 32-bytes. The hashed user ID of the owner.
-is_locked: Boolean, default as False.
-policy: Dict. The policies, e.g. acceptable content type and content length range, and expire time.
-access_point: Dict. If locked, then this contains downloading URL; if unlocked, then this contains uploading URL and fields information.
+id (UUID, 32-bytes)
+uid (UUID, 32-bytes. The hashed user ID of the owner)
+expires (Integer, timestamp. The timestamp that the locker expires)
+policy:
+  content_type (String, optional. acceptable MIME types)
+  content_length_range (List of 2, optional. First element is min length, second is max length)
+  expires_in_sec (Integer, required. The lifetime of the locker)
+upload_info:
+  url (String. The uploading link)
+  fields (Dict. The uploading fields)
+content (List. Information about the files in the locker): [
+  {
+    filename (String. File's name)
+    size (Integer. Size in bytes)
+    type (String. MIME-type)
+    download_link (String. The presigned downloading link)
+    download_link_expires (Integer, timestamp. The timestamp that the download link expires)
+  }
+]
 ```
 
 ## API
@@ -36,7 +50,6 @@ FileDepot provides a set of RESTful APTs. The request and response are in the fo
 
 ### Login
 - `POST /login`: Login interface for the client App. If successfully logged in, then the session token is stored in the cookie.
-
   Payload:
 ```
 type: String, required. Type of login, such as "CAS", "OAuth"
@@ -44,23 +57,20 @@ cred: Dict. Cred information for login, different login types have different kin
 ```
 
 - `POST /logout`: Logout interface for the client App. Removes session token in the cookie.
-
   No Payload.
 
 ### Locker
 - `GET /lockers`: Returns the IDs of all lockers owned by the requesting App.
-  Format:
+  Supports query on expiration timestamp. Query format:
 ```
-unlocked: List of unlocked locker IDs
-locked: List of locked locker IDs
+from: min expiration timestamp.
+to: max expiration timestamp.
 ```
 
 - `GET /lockers/:id`: Returns the Locker entity if exists.
-
-  If the locker doesn't exist, then return status code of 404.
+If the locker doesn't exist, then return status code of 404.
 
 - `POST /lockers`: Reserves a locker under the name of the requesting App, returns the Locker entity.
-
   Payload:
 ```
 content_type: String, optional. The accepted type of the uploading files. Can be a MIME prefix like "image/".
@@ -68,10 +78,11 @@ content_length_range: List of 2 Integers, optional. A pair of (min_length, max_l
 expires_in_sec: Integer, optional, default as 3600. The number of seconds the Locker is valid for.
 ```
 
-- `PUT /lockers/:id`: Locks the specified Locker, so that it won't receive new uploads.
-  This also generates a presigned downloading URL, whose valid time is specified in the request:
+- `PUT /lockers/:id`: Extend the expiration time of the locker.
+  Payload:
 ```
-expires_in_sec: Integer, optional, default as 300. The valid time in seconds.
+force: Boolean, default as False. If True, then always extends the expiration time. If False, then only extends if the locker is expired.
+extension_in_sec: Integer, optional, default as 300. The extension time in seconds.
 ```
   Returns the updated LockerEntity. If the locker doesn't exist, then return status code of 404.
 
@@ -79,42 +90,38 @@ expires_in_sec: Integer, optional, default as 300. The valid time in seconds.
   If the locker doesn't exist, then return status code of 404.
 
 ## Storage Backend
-FileDepot is driven by Amazon AWS, specifically S3 and DynamoDB.
+FileDepot is driven by Amazon AWS's S3 and DynamoDB.
 The following describes the operations done in the storage backend when the APIs are called.
 During the deployment, we should first specify a bucket in S3 for FileDepot to work on.
 In the following discussion we will use this bucket as the root, denoted as `/`.
-
-Also during the deployment, there should be two folders created in this bucket, which contain locked and unlocked Lockers correspondingly.
-Denote them as `/locked/`, and `/unlocked/`. 
-
-We also need a DynamoDB table, which records the states of Lockers.
-
-TODO: Atomic operations
+We also need a DynamoDB table, which records the states of Lockers, denoted as `db`.
 
 - `POST /locker`:
-  1. Generates a UUID denoted as `$uuid`, then creates the folder `/unlocked/$uuid/`. Use `$uuid` as the Locker's ID.
+  1. Generates a UUID denoted as `$uuid`, then creates the folder `/$uuid/`. Use `$uuid` as the Locker's ID.
   2. Creates the DynamoDB record for the Locker.
-  3. Generates a presigned POST with S3's API for `/unlocked/$uuid/`, with the conditions specified in the request.
+  3. Generates a presigned POST with S3's API for `/$uuid/`, with the conditions specified in the request.
   4. Constructs the Locker entity with the returning presigned uploading URL and fields information, and stores it in the DynamoDB record of this Locker.
   5. Returns the JSON representation of the Locker entity.
 
 - `PUT /lockers/:id`:
-  1. If `/unlocked/$uid/$id/` exists, then moves `/unlocked/$id/` to `/locked/$id/`.
-  2. Updates the DynamoDB record of this Locker accordingly.
-  3. Generates a presigned URL with S3's API for `/locked/$id/`, with the valid time specified in the request.
-  4. Constructs the Locker entity with the returning presigned downloading URL, and save it in the DynamoDB record of this Locker.
-  4. Returns the JSON representation of the Locker entity.
+  1. Retrieve the DynamoDB record of Locker #`id` from `db`.
+  2. If `force == True`, then compute the new expiration timestamp by adding old expiration timestamp and the requested extension seconds, and generate a new presigned POST.
+  3. If `force == False`, then only extend when the locker expires, by adding the current timestamp and the requested extension seconds. If the locker's expiration time is extended, then generate new presigned POST, otherwise not.
+  4. Update and return the JSON representation of the Locker entity accordingly.
 
 - `GET /lockers/:id`:
   1. Looks up this Locker in the DynamoDB.
   2. Constructs the JSON representation of the Locker entity according to the record.
+  3. Check the files in `/$id/`, if any of them doesn't exist in the `content` list, then create the presigned URL for it, and add it into the `content` list.
+  4. If any of the files' downloading link expires, then re-generate the presigned link, and update the Locker entity.
   3. Returns the Locker entity.
 
 - `DELETE /lockers/:id`:
-  1. Deletes both `/unlocked/$id/` and `/locked/$id/`.
+  1. Deletes `/$id/`.
   2. Deletes the DynamoDB record of this Locker.
 
-- `GET /lockers`: Just iterate all Lockers in the DynamoDB table that belong to the current App.
+- `GET /lockers`: Just iterate all Lockers in the DynamoDB table that belong to the current user.
+  If there's querystring, then set the query conditions accordingly.
 
 ## References
 http://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-HTTPPOSTConstructPolicy.html
