@@ -44,3 +44,11 @@ class S3sh(object):
             Conditions = conditions,
             ExpiresIn = expires_in_sec
         )
+    def presigned_url(self, key, **kwargs):
+        expires_in_sec = 300
+        if expires_in_sec in kwargs:
+            expires_in_sec = kwargs["expires_in_sec"]
+        return client.generate_presigned_url("get_object", Params={
+            "Bucket": self.bucket,
+            "key": self.key_prefix + key,
+        }, ExpiresIn=expires_in_sec)

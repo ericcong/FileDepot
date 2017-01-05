@@ -11,6 +11,7 @@ from S3sh import S3sh
 session_expire_sec = 600
 s3sh = S3sh("undergrad", "FileDepot/")
 db = boto3.resource("dynamodb").Table("FileDepot")
+salt = "OIT-FileDepot"
 
 app = Flask(__name__)
 api = Api(app)
@@ -21,14 +22,14 @@ def make_session(uid):
     session_id = str(uuid.uuid4())
     sessions[session_id] = {
         "uid": uid,
-        "expire_time": int(time.time()) + session_expire_sec
+        "expires": int(time.time()) + session_expire_sec
     }
     return session_id
 
 def make_uid(request):
     try:
         json_data = request.get_json(force=True)
-        return hashlib.sha256((json_data["type"] + json_data["cred"]["id"]).encode("utf-8")).hexdigest()
+        return hashlib.sha256((json_data["type"] + json_data["cred"]["id"] + salt).encode("utf-8")).hexdigest()
     except:
         abort(400)
 
@@ -36,7 +37,7 @@ def get_uid(session_id):
     if session_id not in sessions:
         abort(401)
     session = sessions[session_id]
-    if session["expire_time"] <= int(time.time()):
+    if session["expires"] <= int(time.time()):
         del sessions[session_id]
         abort(401)
     return session["uid"]
@@ -68,29 +69,33 @@ class Lockers(Resource):
 
         while True:
             locker_id = str(uuid.uuid4())
-            unlocked_locker_key = "unlocked/" + locker_id + "/"
-            locked_locker_key = "locked/" + locker_id + "/"
-            if not s3sh.has(unlocked_locker_key) and not s3sh.has(locked_locker_key):
+            locker_key = locker_id + "/"
+            if not s3sh.has(locker_key):
+                s3sh.touch(locker_key)
                 break
 
-        s3sh.touch(unlocked_locker_key)
+        expires_in_sec = 3600
+        if "expires_in_sec" in request_json:
+            expires_in_sec = request_json["expires_in_sec"]
+        expires = int(time.time()) + expires_in_sec
 
-        conditions = dict()
+        conditions = {
+            "expires_in_sec": expires_in_sec
+        }
         if "content_type" in request_json:
             conditions["content_type"] = request_json["content_type"]
         if "content_length_range" in request_json:
             conditions["content_length_range"] = request_json["content_length_range"]
-        if "expires_in_sec" in request_json:
-            conditions["expires_in_sec"] = request_json["expires_in_sec"]
 
-        presigned_post = s3sh.presigned_post(unlocked_locker_key, **conditions)
+        presigned_post = s3sh.presigned_post(locker_key, **conditions)
 
         locker_entity = {
             "id": locker_id,
             "uid": uid,
+            "expires": expires,
             "policy": conditions,
-            "locked": False,
-            "endpoint": presigned_post
+            "upload_info": presigned_post,
+            "content": []
         }
 
         db.put_item(Item = locker_entity)
@@ -117,7 +122,3 @@ api.add_resource(Logout, '/logout')
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
-
-#test = s3.Object("undergrad", "test.jpg")
-#url = client.generate_presigned_url('get_object', Params={'Bucket': "undergrad", 'Key': "test.jpg"}, ExpiresIn=10)
-#print(url)
