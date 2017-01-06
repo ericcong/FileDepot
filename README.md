@@ -104,8 +104,8 @@ We also need a DynamoDB table, which records the states of Lockers, denoted as `
 
 - `PUT /lockers/:id`:
   1. Retrieve the DynamoDB record of Locker #`id` from `db`.
-  2. If `force == True`, then compute the new expiration timestamp by adding old expiration timestamp and the requested extension seconds, and generate a new presigned POST.
-  3. If `force == False`, then only extend when the locker expires, by adding the current timestamp and the requested extension seconds. If the locker's expiration time is extended, then generate new presigned POST, otherwise not.
+  2. If `force == True`, then always extend expiration time; If `force == False`, then only extend when the locker expires. Compute the new expiration time by adding the current timestamp and the requested extension seconds.
+  3. If the locker's expiration time is extended, then generate new presigned POST, otherwise not.
   4. Update and return the JSON representation of the Locker entity accordingly.
 
 - `GET /lockers/:id`:

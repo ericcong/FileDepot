@@ -10,17 +10,25 @@ from flask_restful import Resource, Api, abort
 from S3sh import S3sh
 from boto3.dynamodb.conditions import Key
 
-# Config
+# <Config>
 session_expire_sec = 600
 download_link_expires_in_sec = 600
-s3sh = S3sh("undergrad", "FileDepot/")
-db = boto3.resource("dynamodb").Table("FileDepot")
+bucket = "undergrad"
+key_prefix = "FileDepot/"
+table = "FileDepot"
 salt = "OIT-FileDepot"
+# </Config>
 
+s3sh = S3sh(bucket, key_prefix)
+db = boto3.resource("dynamodb").Table(table)
 app = Flask(__name__)
 api = Api(app)
-
 sessions = dict()
+
+def decimal_default(obj):
+    if isinstance(obj, decimal.Decimal):
+        return int(obj)
+    raise TypeError
 
 def make_session(uid):
     session_id = str(uuid.uuid4())
@@ -110,22 +118,18 @@ class Lockers(Resource):
         return locker_entity
 
     def get(self, locker_id=None):
-        if not locker_id:
-            print("query")
         session_id = get_session_id(request, querystring = True)
         uid = get_uid(session_id)
 
-        try:
+        if not locker_id:
+            pass
 
+        try:
             locker = db.query(
                 IndexName='id-uid-index',
                 KeyConditionExpression=Key('id').eq(locker_id) & Key('uid').eq(uid)
             )["Items"][0]
 
-            def decimal_default(obj):
-                if isinstance(obj, decimal.Decimal):
-                    return int(obj)
-                raise TypeError
 
             locker = json.loads(json.dumps(locker, default=decimal_default))
 
@@ -167,7 +171,28 @@ class Lockers(Resource):
             abort(404)
 
     def put(self, locker_id):
-        pass
+        session_id = get_session_id(request)
+        uid = get_uid(session_id)
+        try:
+            request_json = request.get_json(force=True)
+            extension_in_sec = request_json["extension_in_sec"]
+            locker = db.query(
+                IndexName='id-uid-index',
+                KeyConditionExpression=Key('id').eq(locker_id) & Key('uid').eq(uid)
+            )["Items"][0]
+
+            now = int(time.time())
+            if ("force" in request_json and request_json["force"] is True) or (locker["expires"] < now):
+                conditions = locker["policy"]
+                conditions["expires_in_sec"] = extension_in_sec
+                locker["upload_info"] = s3sh.presigned_post(locker_id + "/", **conditions)
+                locker["policy"] = conditions
+                locker["expires"] = now + extension_in_sec
+                db.put_item(Item = locker)
+            locker = json.loads(json.dumps(locker, default=decimal_default))
+            return locker
+        except:
+            abort(400)
 
 api.add_resource(Lockers, "/lockers", "/lockers/<locker_id>")
 api.add_resource(Login, "/login")
