@@ -59,8 +59,7 @@ cred: Dict. Cred information for login, different login types have different kin
   No Payload.
 
 ### Locker
-- `GET /lockers`: Returns the IDs of all lockers owned by the requesting App.
-  Supports query on expiration timestamp. Query format:
+- `GET /lockers`: Returns the IDs of all lockers owned by the requesting App which have the specified range of expiration timestamp. Query format:
 ```
 from: min expiration timestamp.
 to: max expiration timestamp.

@@ -122,7 +122,14 @@ class Lockers(Resource):
         uid = get_uid(session_id)
 
         if not locker_id:
-            pass
+            try:
+                lockers = db.query(
+                    IndexName='uid-expires-index',
+                    KeyConditionExpression=Key('uid').eq(uid) & Key('expires').gte(int(request_json["from"])) & Key("expires").lte(int(request_json["to"]))
+                )["Items"]
+                return json.loads(json.dumps(lockers, default=decimal_default))
+            except:
+                abort(400)
 
         try:
             locker = db.query(
