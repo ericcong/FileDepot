@@ -1,4 +1,6 @@
 import os
+import decimal
+import json
 import time
 import uuid
 import hashlib
@@ -6,9 +8,11 @@ import boto3
 from flask import Flask, request
 from flask_restful import Resource, Api, abort
 from S3sh import S3sh
+from boto3.dynamodb.conditions import Key
 
 # Config
 session_expire_sec = 600
+download_link_expires_in_sec = 600
 s3sh = S3sh("undergrad", "FileDepot/")
 db = boto3.resource("dynamodb").Table("FileDepot")
 salt = "OIT-FileDepot"
@@ -45,9 +49,12 @@ def get_uid(session_id):
 def delete_session(session_id):
     del sessions[session_id]
 
-def get_session_id(request):
+def get_session_id(request, **kwargs):
     try:
-        return request.get_json(force=True)["session_id"]
+        if "querystring" in kwargs and kwargs["querystring"] is True:
+            return request.args["session_id"]
+        else:
+            return request.get_json(force=True)["session_id"]
     except:
         abort(400)
 
@@ -64,7 +71,6 @@ class Logout(Resource):
 class Lockers(Resource):
     def post(self):
         session_id = get_session_id(request)
-        request_json = request.get_json(force=True)
         uid = get_uid(session_id)
 
         while True:
@@ -74,6 +80,7 @@ class Lockers(Resource):
                 s3sh.touch(locker_key)
                 break
 
+        request_json = request.get_json(force=True)
         expires_in_sec = 3600
         if "expires_in_sec" in request_json:
             expires_in_sec = request_json["expires_in_sec"]
@@ -95,29 +102,65 @@ class Lockers(Resource):
             "expires": expires,
             "policy": conditions,
             "upload_info": presigned_post,
-            "content": []
+            "files": dict()
         }
 
         db.put_item(Item = locker_entity)
 
         return locker_entity
 
-    def get(self):
-        pass
+    def get(self, locker_id=None):
+        if not locker_id:
+            print("query")
+        session_id = get_session_id(request, querystring = True)
+        uid = get_uid(session_id)
 
+        try:
 
-class Locker(Resource):
-    def get(self, locker_id):
-        pass
+            locker = db.query(
+                IndexName='id-uid-index',
+                KeyConditionExpression=Key('id').eq(locker_id) & Key('uid').eq(uid)
+            )["Items"][0]
+
+            def decimal_default(obj):
+                if isinstance(obj, decimal.Decimal):
+                    return int(obj)
+                raise TypeError
+
+            locker = json.loads(json.dumps(locker, default=decimal_default))
+
+            for item in s3sh.ls(locker["id"] + "/"):
+                key = item["key"]
+                if key not in locker["files"]:
+                    locker["files"][key] = dict()
+                locker["files"][key]["filename"] = item["filename"]
+                locker["files"][key]["size"] = item["size"]
+                locker["files"][key]["alive"] = True
+
+                if "download_link" not in locker["files"][key] or locker["files"][key]["download_link_expires"] < int(time.time()):
+                    locker["files"][key]["download_link_expires"] = int(time.time()) + download_link_expires_in_sec
+                    locker["files"][key]["download_link"] = s3sh.presigned_url(key, expires_in_sec=download_link_expires_in_sec)
+
+            for key in dict(locker["files"]):
+                if "alive" not in locker["files"][key]:
+                    del locker["files"][key]
+            for key in dict(locker["files"]):
+                del locker["files"][key]["alive"]
+
+            db.put_item(Item = locker)
+
+            return locker
+        except:
+            abort(404)
+
     def put(self, locker_id):
         pass
     def delete(self, locker_id):
         pass
 
-api.add_resource(Lockers, '/lockers')
-api.add_resource(Locker, '/lockers/<locker_id>')
-api.add_resource(Login, '/login')
-api.add_resource(Logout, '/logout')
+api.add_resource(Lockers, "/lockers", "/lockers/<locker_id>")
+api.add_resource(Login, "/login")
+api.add_resource(Logout, "/logout")
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

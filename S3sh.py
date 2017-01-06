@@ -44,11 +44,24 @@ class S3sh(object):
             Conditions = conditions,
             ExpiresIn = expires_in_sec
         )
+
     def presigned_url(self, key, **kwargs):
         expires_in_sec = 300
-        if expires_in_sec in kwargs:
+        if "expires_in_sec" in kwargs:
             expires_in_sec = kwargs["expires_in_sec"]
         return client.generate_presigned_url("get_object", Params={
             "Bucket": self.bucket,
-            "key": self.key_prefix + key,
+            "Key": self.key_prefix + key,
         }, ExpiresIn=expires_in_sec)
+
+    def ls(self, key):
+        bucket = s3.Bucket(self.bucket)
+        prefix = self.key_prefix + key
+        for item in bucket.objects.filter(Prefix = prefix):
+            if item.key == prefix:
+                continue
+            yield {
+                "key": item.key,
+                "filename": item.key[len(prefix) : ],
+                "size": item.size
+            }

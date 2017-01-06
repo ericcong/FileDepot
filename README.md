@@ -34,11 +34,10 @@ policy:
 upload_info:
   url (String. The uploading link)
   fields (Dict. The uploading fields)
-content (List. Information about the files in the locker): [
-  {
+files (Dict. Information about the files in the locker): {
+  $key (String. File's key in S3 ): {
     filename (String. File's name)
     size (Integer. Size in bytes)
-    type (String. MIME-type)
     download_link (String. The presigned downloading link)
     download_link_expires (Integer, timestamp. The timestamp that the download link expires)
   }
@@ -112,9 +111,10 @@ We also need a DynamoDB table, which records the states of Lockers, denoted as `
 - `GET /lockers/:id`:
   1. Looks up this Locker in the DynamoDB.
   2. Constructs the JSON representation of the Locker entity according to the record.
-  3. Check the files in `/$id/`, if any of them doesn't exist in the `content` list, then create the presigned URL for it, and add it into the `content` list.
+  3. Check the files in `/$id/`, if any of them doesn't exist in the `files` dict, then create the presigned URL for it, and add it into the `files` dict.
   4. If any of the files' downloading link expires, then re-generate the presigned link, and update the Locker entity.
-  3. Returns the Locker entity.
+  5. If any of the element in `files` dict no longer exists in S3, then remove it.
+  6. Returns the Locker entity.
 
 - `DELETE /lockers/:id`:
   1. Deletes `/$id/`.
