@@ -153,9 +153,20 @@ class Lockers(Resource):
         except:
             abort(404)
 
-    def put(self, locker_id):
-        pass
     def delete(self, locker_id):
+        session_id = get_session_id(request)
+        uid = get_uid(session_id)
+        try:
+            locker = db.query(
+                IndexName='id-uid-index',
+                KeyConditionExpression=Key('id').eq(locker_id) & Key('uid').eq(uid)
+            )["Items"][0]
+            s3sh.rm(locker["id"] + "/")
+            db.delete_item(Key={"id": locker["id"]})
+        except:
+            abort(404)
+
+    def put(self, locker_id):
         pass
 
 api.add_resource(Lockers, "/lockers", "/lockers/<locker_id>")

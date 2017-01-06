@@ -65,3 +65,13 @@ class S3sh(object):
                 "filename": item.key[len(prefix) : ],
                 "size": item.size
             }
+
+    def rm(self, *keys):
+        bucket = s3.Bucket(self.bucket)
+        objects = list()
+        for key in keys:
+            objects.append({"Key": self.key_prefix + key})
+        if objects:
+            return bucket.delete_objects(Delete = {
+                "Objects": objects
+            })

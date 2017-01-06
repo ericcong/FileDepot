@@ -23,3 +23,7 @@ session_id = login("CAS", "ccong")["session_id"]
 locker_id = "55a5dacd-9f6e-4fb2-b7ac-f5bf77f35cc8"
 queried_locker = requests.get(root + "lockers/" + locker_id, params={"session_id": session_id}).json()
 print("Queried locker: " + json.dumps(queried_locker))
+
+# DELETE /lockers/:id
+locker_id = "55a5dacd-9f6e-4fb2-b7ac-f5bf77f35cc8"
+print(requests.delete(root + "lockers/" + locker_id, data=json.dumps({"session_id": session_id})))
