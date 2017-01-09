@@ -35,15 +35,15 @@ policy:
   expires_in_sec (Integer, required. The lifetime of the locker)
 slots (Dict. Information about the free space of the locker): {
   $key (String. Slot's key in S3 ): {
-    upload_url (String. The uploading link)
-    upload_fields (Dict. The uploading fields)
+    url (String. The uploading link)
+    fields (Dict. The uploading fields)
   }
 }
 files (Dict. Information about the uploaded files of the locker): {
   $key (String. File's key in S3 ): {
     size (Integer. Size in bytes)
-    download_link (String. The presigned downloading link)
-    download_link_expires (Integer, timestamp. The timestamp that the download link expires)
+    link (String. The presigned downloading link)
+    link_expires (Integer, timestamp. The timestamp that the download link expires)
 }
 ```
 

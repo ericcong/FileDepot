@@ -102,14 +102,23 @@ class Lockers(Resource):
         if "content_length_range" in request_json:
             conditions["content_length_range"] = request_json["content_length_range"]
 
-        presigned_post = s3sh.presigned_post(locker_key, **conditions)
+        size = 5
+        if "size" in request_json:
+            size = request_json["size"]
+
+        slots = dict()
+        for i in range(0, size):
+            slot_id = str(uuid.uuid4())
+            slots[slot_id] = s3sh.presigned_post(locker_key + slot_id, **conditions)
 
         locker_entity = {
             "id": locker_id,
             "uid": uid,
             "expires": expires,
+            "size": size,
+            "space": size,
             "policy": conditions,
-            "upload_info": presigned_post,
+            "slots": slots,
             "files": dict()
         }
 
@@ -121,6 +130,7 @@ class Lockers(Resource):
         session_id = get_session_id(request, querystring = True)
         uid = get_uid(session_id)
 
+        # GET /lockers
         if not locker_id:
             try:
                 lockers = db.query(
@@ -131,6 +141,7 @@ class Lockers(Resource):
             except:
                 abort(400)
 
+        # GET /lockers/:id
         try:
             locker = db.query(
                 IndexName='id-uid-index',
