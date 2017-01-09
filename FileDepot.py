@@ -133,10 +133,26 @@ class Lockers(Resource):
         # GET /lockers
         if not locker_id:
             try:
-                lockers = db.query(
-                    IndexName='uid-expires-index',
-                    KeyConditionExpression=Key('uid').eq(uid) & Key('expires').gte(int(request_json["from"])) & Key("expires").lte(int(request_json["to"]))
-                )["Items"]
+                candidates = list()
+                def query(key):
+                    if ("min_" + key) in request_json or ("max_" + key) in request_json:
+                        keyConditionExpression = Key("uid").eq(uid)
+                        if ("min_" + key) in request_json:
+                            keyConditionExpression &= Key(key).gte(int(request_json["min_" + key]))
+                        if ("max_" + key) in request_json:
+                            keyConditionExpression &= Key(key).lte(int(request_json["max_" + key]))
+                        candidate = db.query(
+                            IndexName = "uid-" + key + "-index",
+                            KeyConditionExpression = keyConditionExpression
+                        )["Items"]
+                        if candidate:
+                            candidates.append(candidate)
+
+                query("expires")
+                query("size")
+                query("space")
+
+                lockers = set.intersection(*map(set, candidates))
                 return json.loads(json.dumps(lockers, default=decimal_default))
             except:
                 abort(400)
@@ -148,29 +164,21 @@ class Lockers(Resource):
                 KeyConditionExpression=Key('id').eq(locker_id) & Key('uid').eq(uid)
             )["Items"][0]
 
-
             locker = json.loads(json.dumps(locker, default=decimal_default))
 
             for item in s3sh.ls(locker["id"] + "/"):
-                key = item["key"]
-                if key not in locker["files"]:
-                    locker["files"][key] = dict()
-                locker["files"][key]["filename"] = item["filename"]
-                locker["files"][key]["size"] = item["size"]
-                locker["files"][key]["alive"] = True
+                fid = item["filename"]
+                if fid in locker["slots"]:
+                    del locker["slots"][fid]
+                    locker["files"][fid] = dict()
+                if fid in locker["files"]:
+                    locker["files"][fid]["size"] = item["size"]
+                    if "link" not in locker["files"][fid] or locker["files"][fid]["link_expires"] < int(time.time()):
+                        locker["files"][fid]["link_expires"] = int(time.time()) + download_link_expires_in_sec
+                        locker["files"][fid]["link"] = s3sh.presigned_url(item["key"], expires_in_sec=download_link_expires_in_sec)
 
-                if "download_link" not in locker["files"][key] or locker["files"][key]["download_link_expires"] < int(time.time()):
-                    locker["files"][key]["download_link_expires"] = int(time.time()) + download_link_expires_in_sec
-                    locker["files"][key]["download_link"] = s3sh.presigned_url(key, expires_in_sec=download_link_expires_in_sec)
-
-            for key in dict(locker["files"]):
-                if "alive" not in locker["files"][key]:
-                    del locker["files"][key]
-            for key in dict(locker["files"]):
-                del locker["files"][key]["alive"]
-
+            locker["space"] -= len(locker["files"])
             db.put_item(Item = locker)
-
             return locker
         except:
             abort(404)

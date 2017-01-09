@@ -61,7 +61,7 @@ class S3sh(object):
             if item.key == prefix:
                 continue
             yield {
-                "key": item.key[len(prefix) : ],
+                "key": item.key,
                 "filename": item.key[len(prefix) : ],
                 "size": item.size
             }
