@@ -9,6 +9,7 @@ from flask import Flask, request
 from flask_restful import Resource, Api, abort
 from S3sh import S3sh
 from boto3.dynamodb.conditions import Key
+from functools import reduce
 
 # <Config>
 session_expire_sec = 600
@@ -83,50 +84,53 @@ class Lockers(Resource):
         session_id = get_session_id(request)
         uid = get_uid(session_id)
 
-        while True:
-            locker_id = str(uuid.uuid4())
-            locker_key = locker_id + "/"
-            if not s3sh.has(locker_key):
-                s3sh.touch(locker_key)
-                break
+        try:
+            while True:
+                locker_id = str(uuid.uuid4())
+                locker_key = locker_id + "/"
+                if not s3sh.has(locker_key):
+                    s3sh.touch(locker_key)
+                    break
 
-        request_json = request.get_json(force=True)
-        expires_in_sec = default_locker_expires_in_sec
-        if "expires_in_sec" in request_json:
-            expires_in_sec = request_json["expires_in_sec"]
-        expires = int(time.time()) + expires_in_sec
+            request_json = request.get_json(force=True)
+            expires_in_sec = default_locker_expires_in_sec
+            if "expires_in_sec" in request_json:
+                expires_in_sec = request_json["expires_in_sec"]
+            expires = int(time.time()) + expires_in_sec
 
-        conditions = {
-            "expires_in_sec": expires_in_sec
-        }
-        if "content_type" in request_json:
-            conditions["content_type"] = request_json["content_type"]
-        if "content_length_range" in request_json:
-            conditions["content_length_range"] = request_json["content_length_range"]
+            conditions = {
+                "expires_in_sec": expires_in_sec
+            }
+            if "content_type" in request_json:
+                conditions["content_type"] = request_json["content_type"]
+            if "content_length_range" in request_json:
+                conditions["content_length_range"] = request_json["content_length_range"]
 
-        size = default_locker_size
-        if "size" in request_json:
-            size = request_json["size"]
+            size = default_locker_size
+            if "size" in request_json:
+                size = request_json["size"]
 
-        slots = dict()
-        for i in range(0, size):
-            slot_id = str(uuid.uuid4())
-            slots[slot_id] = s3sh.presigned_post(locker_key + slot_id, **conditions)
+            slots = dict()
+            for i in range(0, size):
+                slot_id = str(uuid.uuid4())
+                slots[slot_id] = s3sh.presigned_post(locker_key + slot_id, **conditions)
 
-        locker_entity = {
-            "id": locker_id,
-            "uid": uid,
-            "expires": expires,
-            "size": size,
-            "space": size,
-            "policy": conditions,
-            "slots": slots,
-            "files": dict()
-        }
+            locker_entity = {
+                "id": locker_id,
+                "uid": uid,
+                "expires": expires,
+                "size": size,
+                "space": size,
+                "policy": conditions,
+                "slots": slots,
+                "files": dict()
+            }
 
-        db.put_item(Item = locker_entity)
+            db.put_item(Item = locker_entity)
 
-        return locker_entity
+            return locker_entity
+        except:
+            abort(400)
 
     def get(self, locker_id=None):
         session_id = get_session_id(request, querystring = True)
@@ -135,26 +139,19 @@ class Lockers(Resource):
         # GET /lockers
         if not locker_id:
             try:
-                candidates = list()
-                def query(key):
-                    if ("min_" + key) in request_json or ("max_" + key) in request_json:
-                        keyConditionExpression = Key("uid").eq(uid)
-                        if ("min_" + key) in request_json:
-                            keyConditionExpression &= Key(key).gte(int(request_json["min_" + key]))
-                        if ("max_" + key) in request_json:
-                            keyConditionExpression &= Key(key).lte(int(request_json["max_" + key]))
-                        candidate = db.query(
-                            IndexName = "uid-" + key + "-index",
-                            KeyConditionExpression = keyConditionExpression
-                        )["Items"]
-                        if candidate:
-                            candidates.append(candidate)
+                filters = list()
+                for condition in ["expires", "size", "space"]:
+                    if ("min_" + condition) in request.args:
+                        filters.append(Key(condition).gte(int(request.args["min_" + condition])))
+                    if ("max_" + condition) in request.args:
+                        filters.append(Key(condition).lte(int(request.args["max_" + condition])))
 
-                query("expires")
-                query("size")
-                query("space")
+                lockers = db.query(
+                    IndexName='uid-index',
+                    KeyConditionExpression=Key('uid').eq(uid),
+                    FilterExpression=reduce(lambda a, b: a & b, filters)
+                )["Items"]
 
-                lockers = set.intersection(*map(set, candidates))
                 return json.loads(json.dumps(lockers, default=decimal_default))
             except:
                 abort(400)
@@ -225,11 +222,11 @@ class Lockers(Resource):
                 extension = request_json["size"]["extension"]
                 if ("force" in request_json["size"] and request_json["size"]["force"] is True) or (locker["space"] == 0):
                     conditions = locker["policy"]
-                    for i in range(0, request_json["size"]):
+                    for i in range(0, extension):
                         slot_id = str(uuid.uuid4())
                         locker["slots"][slot_id] = s3sh.presigned_post(locker["id"] + "/" + slot_id, **conditions)
-                    locker["size"] += request_json["size"]
-                    locker["space"] += request_json["size"]
+                    locker["size"] += extension
+                    locker["space"] += extension
 
             db.put_item(Item = locker)
             locker = json.loads(json.dumps(locker, default=decimal_default))
