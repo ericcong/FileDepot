@@ -27,21 +27,24 @@ A locker can be represented as such an entity:
 id (UUID, 32-bytes)
 uid (UUID, 32-bytes. The hashed user ID of the owner)
 expires (Integer, timestamp. The timestamp that the locker expires)
+size (Integer. The maximum number of files of the locker)
+space (Integer. The number of files that can be uploaded to the locker)
 policy:
   content_type (String, optional. acceptable MIME types)
   content_length_range (List of 2, optional. First element is min length, second is max length)
   expires_in_sec (Integer, required. The lifetime of the locker)
-upload_info:
-  url (String. The uploading link)
-  fields (Dict. The uploading fields)
-files (Dict. Information about the files in the locker): {
+slots (Dict. Information about the free space of the locker): {
+  $key (String. Slot's key in S3 ): {
+    upload_url (String. The uploading link)
+    upload_fields (Dict. The uploading fields)
+  }
+}
+files (Dict. Information about the uploaded files of the locker): {
   $key (String. File's key in S3 ): {
-    filename (String. File's name)
     size (Integer. Size in bytes)
     download_link (String. The presigned downloading link)
     download_link_expires (Integer, timestamp. The timestamp that the download link expires)
-  }
-]
+}
 ```
 
 ## API
@@ -59,10 +62,14 @@ cred: Dict. Cred information for login, different login types have different kin
   No Payload.
 
 ### Locker
-- `GET /lockers`: Returns the IDs of all lockers owned by the requesting App which have the specified range of expiration timestamp. Query format:
+- `GET /lockers`: Returns the IDs of all lockers owned by the requesting App which have the specified range of expiration timestamp, size, or free space. Query format:
 ```
-from: min expiration timestamp.
-to: max expiration timestamp.
+min_expires: min expiration timestamp.
+max_expires: max expiration timestamp.
+min_size: min size.
+max_size: max size.
+min_space: min free space.
+max_space: max free space.
 ```
 
 - `GET /lockers/:id`: Returns the Locker entity if exists.
@@ -71,16 +78,21 @@ If the locker doesn't exist, then return status code of 404.
 - `POST /lockers`: Reserves a locker under the name of the requesting App, returns the Locker entity.
   Payload:
 ```
+size: Integer, optional, default as 5. The maximum number of files of the Locker.
 content_type: String, optional. The accepted type of the uploading files. Can be a MIME prefix like "image/".
 content_length_range: List of 2 Integers, optional. A pair of (min_length, max_length).
 expires_in_sec: Integer, optional, default as 3600. The number of seconds the Locker is valid for.
 ```
 
-- `PUT /lockers/:id`: Extend the expiration time of the locker.
+- `PUT /lockers/:id`: Extend the expiration time or the size of the locker.
   Payload:
 ```
-force: Boolean, default as False. If True, then always extends the expiration time. If False, then only extends if the locker is expired.
-extension_in_sec: Integer, optional, default as 300. The extension time in seconds.
+expires:
+  force: Boolean, default as False. If True, then always extends the expiration time. If False, then only extends if the locker is expired.
+  extension_in_sec: Integer, optional, default as 300. The extension time in seconds.
+size:
+  force: Boolean, default as False. If True, then always extend the size. If False, then only extends if the locker is full.
+  extension: Integer, optional, default as 5. The extended size.
 ```
   Returns the updated LockerEntity. If the locker doesn't exist, then return status code of 404.
 
@@ -97,23 +109,22 @@ We also need a DynamoDB table, which records the states of Lockers, denoted as `
 - `POST /locker`:
   1. Generates a UUID denoted as `$uuid`, then creates the folder `/$uuid/`. Use `$uuid` as the Locker's ID.
   2. Creates the DynamoDB record for the Locker.
-  3. Generates a presigned POST with S3's API for `/$uuid/`, with the conditions specified in the request.
-  4. Constructs the Locker entity with the returning presigned uploading URL and fields information, and stores it in the DynamoDB record of this Locker.
+  3. Say the size is `n`, then generate `n` UUIDs, denoted as `$fid`. Generate presigned POST of `/$uuid/$fid` for each `$fid`, with the conditions specified in the request.
+  4. Constructs the Locker entity with the returning presigned uploading URLs and fields information, and stores it in the DynamoDB record of this Locker.
   5. Returns the JSON representation of the Locker entity.
 
 - `PUT /lockers/:id`:
   1. Retrieve the DynamoDB record of Locker #`id` from `db`.
-  2. If `force == True`, then always extend expiration time; If `force == False`, then only extend when the locker expires. Compute the new expiration time by adding the current timestamp and the requested extension seconds.
-  3. If the locker's expiration time is extended, then generate new presigned POST, otherwise not.
+  2. For extending expiration time: if `force == True`, then always extend expiration time; If `force == False`, then only extend when the locker expires. Compute the new expiration time by adding the current timestamp and the requested extension seconds. If the locker's expiration time is extended, then generate new presigned POST, otherwise not.
+  3. For extending size: if `force == True`, then always extend size, else only extend when the locker is full. Create new `$fid`s and their presigned POSTs.
   4. Update and return the JSON representation of the Locker entity accordingly.
 
 - `GET /lockers/:id`:
   1. Looks up this Locker in the DynamoDB.
   2. Constructs the JSON representation of the Locker entity according to the record.
-  3. Check the files in `/$id/`, if any of them doesn't exist in the `files` dict, then create the presigned URL for it, and add it into the `files` dict.
+  3. Check the files in `/$id/`, if any of them doesn't exist in the `files` dict, then create the presigned URL for it, and add it into the `files` dict. Then remove the corresponding `$fid` from `slots` dict. 
   4. If any of the files' downloading link expires, then re-generate the presigned link, and update the Locker entity.
-  5. If any of the element in `files` dict no longer exists in S3, then remove it.
-  6. Returns the Locker entity.
+  5. Returns the Locker entity.
 
 - `DELETE /lockers/:id`:
   1. Deletes `/$id/`.
