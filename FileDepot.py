@@ -193,6 +193,8 @@ class Lockers(Resource):
                 IndexName='id-uid-index',
                 KeyConditionExpression=Key('id').eq(locker_id) & Key('uid').eq(uid)
             )["Items"][0]
+            for key in locker["files"]:
+                s3sh.rm(locker["id"] + "/" + key)
             s3sh.rm(locker["id"] + "/")
             db.delete_item(Key={"id": locker["id"]})
         except:
