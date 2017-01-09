@@ -13,6 +13,8 @@ from boto3.dynamodb.conditions import Key
 # <Config>
 session_expire_sec = 600
 download_link_expires_in_sec = 600
+default_locker_expires_in_sec = 3600
+default_locker_size = 5
 bucket = "undergrad"
 key_prefix = "FileDepot/"
 table = "FileDepot"
@@ -89,7 +91,7 @@ class Lockers(Resource):
                 break
 
         request_json = request.get_json(force=True)
-        expires_in_sec = 3600
+        expires_in_sec = default_locker_expires_in_sec
         if "expires_in_sec" in request_json:
             expires_in_sec = request_json["expires_in_sec"]
         expires = int(time.time()) + expires_in_sec
@@ -102,7 +104,7 @@ class Lockers(Resource):
         if "content_length_range" in request_json:
             conditions["content_length_range"] = request_json["content_length_range"]
 
-        size = 5
+        size = default_locker_size
         if "size" in request_json:
             size = request_json["size"]
 
@@ -201,20 +203,33 @@ class Lockers(Resource):
         uid = get_uid(session_id)
         try:
             request_json = request.get_json(force=True)
-            extension_in_sec = request_json["extension_in_sec"]
             locker = db.query(
                 IndexName='id-uid-index',
                 KeyConditionExpression=Key('id').eq(locker_id) & Key('uid').eq(uid)
             )["Items"][0]
 
-            now = int(time.time())
-            if ("force" in request_json and request_json["force"] is True) or (locker["expires"] < now):
-                conditions = locker["policy"]
-                conditions["expires_in_sec"] = extension_in_sec
-                locker["upload_info"] = s3sh.presigned_post(locker_id + "/", **conditions)
-                locker["policy"] = conditions
-                locker["expires"] = now + extension_in_sec
-                db.put_item(Item = locker)
+            if "expires" in request_json:
+                extension_in_sec = request_json["expires"]["extension_in_sec"]
+                now = int(time.time())
+                if ("force" in request_json["expires"] and request_json["expires"]["force"] is True) or (locker["expires"] < now):
+                    conditions = locker["policy"]
+                    conditions["expires_in_sec"] = extension_in_sec
+                    locker["policy"] = conditions
+                    locker["expires"] = now + extension_in_sec
+                    for slot_id in locker["slots"]:
+                        locker["slots"][slot_id] = s3sh.presigned_post(locker["id"] + "/" + slot_id, **conditions)
+
+            if "size" in request_json:
+                extension = request_json["size"]["extension"]
+                if ("force" in request_json["size"] and request_json["size"]["force"] is True) or (locker["space"] == 0):
+                    conditions = locker["policy"]
+                    for i in range(0, request_json["size"]):
+                        slot_id = str(uuid.uuid4())
+                        locker["slots"][slot_id] = s3sh.presigned_post(locker["id"] + "/" + slot_id, **conditions)
+                    locker["size"] += request_json["size"]
+                    locker["space"] += request_json["size"]
+
+            db.put_item(Item = locker)
             locker = json.loads(json.dumps(locker, default=decimal_default))
             return locker
         except:
