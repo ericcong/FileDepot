@@ -146,11 +146,17 @@ class Lockers(Resource):
                     if ("max_" + condition) in request.args:
                         filters.append(Key(condition).lte(int(request.args["max_" + condition])))
 
-                lockers = db.query(
-                    IndexName='uid-index',
-                    KeyConditionExpression=Key('uid').eq(uid),
-                    FilterExpression=reduce(lambda a, b: a & b, filters)
-                )["Items"]
+                if filters:
+                    lockers = db.query(
+                        IndexName='uid-index',
+                        KeyConditionExpression=Key('uid').eq(uid),
+                        FilterExpression = reduce(lambda a, b: a & b, filters)
+                    )["Items"]
+                else:
+                    lockers = db.query(
+                        IndexName='uid-index',
+                        KeyConditionExpression=Key('uid').eq(uid),
+                    )["Items"]
 
                 return json.loads(json.dumps(lockers, default=decimal_default))
             except:
