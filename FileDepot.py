@@ -184,7 +184,7 @@ class Lockers(Resource):
                         locker["files"][fid]["link_expires"] = int(time.time()) + download_link_expires_in_sec
                         locker["files"][fid]["link"] = s3sh.presigned_url(item["key"], expires_in_sec=download_link_expires_in_sec)
 
-            locker["space"] -= len(locker["files"])
+            locker["space"] = locker["size"] - len(locker["files"])
             db.put_item(Item = locker)
             return locker
         except:
