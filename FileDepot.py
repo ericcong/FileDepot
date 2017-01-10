@@ -150,15 +150,17 @@ class Lockers(Resource):
                     lockers = db.query(
                         IndexName='uid-index',
                         KeyConditionExpression=Key('uid').eq(uid),
+                        ProjectionExpression = "id",
                         FilterExpression = reduce(lambda a, b: a & b, filters)
                     )["Items"]
                 else:
                     lockers = db.query(
                         IndexName='uid-index',
                         KeyConditionExpression=Key('uid').eq(uid),
+                        ProjectionExpression = "id"
                     )["Items"]
 
-                return json.loads(json.dumps(lockers, default=decimal_default))
+                return list(map(lambda a: a["id"], json.loads(json.dumps(lockers, default=decimal_default))))
             except:
                 abort(400)
 
