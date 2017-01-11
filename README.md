@@ -22,19 +22,20 @@ In FileDepot's use case:
 - "Locker" represents a reservation that the App requests for the user to upload files.
 
 ## Locker Entity
-A locker can be represented as such an entity (all fields are required except specified as optional):
+A locker can be represented as such an entity:
 ```
 id (UUID, 32-bytes)
 uid (UUID, 32-bytes. The hashed user ID of the owner)
 expires (Integer, timestamp. The timestamp that the locker expires, i.e., all packages don't accept uploading.)
-notes (String, optional. Notes of this locker, e.g. the purpose of this locker)
+notes (String, default to be null. Notes of this locker, e.g. the purpose of this locker)
 packages: [
   {
     name (String. The name of this package)
     size (Integer. The size of this package)
-    type (String, optional. MIME-type of this package)
-    download_url (String, optional. The presigned downloading link)
-    download_url_expires (Integer, timestamp, optional. The timestamp that the download link expires)
+    type (String, default to be null. MIME-type of this package)
+    size_range (Pair, default to be null. Size range of this package)
+    download_url (String, default to be null. The presigned downloading link)
+    download_url_expires (Integer, timestamp, default to be null. The timestamp that the download link expires)
     upload_url (String. The presigned uploading link)
     upload_fields (Dict. The uploading fields)
   }
@@ -73,8 +74,9 @@ expires_in_sec (Integer, optional, default as 3600. The number of seconds the Lo
 notes (String, optional. The notes of this locker)
 packages: (Ordered list. Packages that should be in this locker) [
   {
-    name (String. The name of this package)
+    name (String, optional. The name of this package; will use UUID if not specified)
     type (String, optional. MIME-type of this package)
+    size_range (Pair, optional. Min and max acceptable size.)
   }
 ]
 ```
@@ -86,8 +88,9 @@ extension_in_sec: Integer, optional, default as 300. The extension of expiration
 notes (String, optional. The notes of this locker)
 packages: (New packages that should be appended.) [
   {
-    name (String. The name of this package)
+    name (String, optional. The name of this package; will use UUID if not specified)
     type (String, optional. MIME-type of this package)
+    size_range (Pair, optional. Min and max acceptable size.)
   }
 ]
 ```
@@ -107,7 +110,7 @@ The DynamoDB table should have two indices: `id-uid-index`, and `uid-index`.
 - `POST /locker`:
   1. Generates a UUID denoted as `$uuid`, then creates the folder `/$uuid/`. Use `$uuid` as the Locker's ID.
   2. Creates the DynamoDB record for the Locker.
-  3. Create package keys according to `package` list. Generate presigned POST for these keys, valid for `expires_in_sec` seconds. If `type` is specified, then set the meta data accordingly.
+  3. Create package keys according to `package` list. Generate presigned POST for these keys, valid for `expires_in_sec` seconds.
   4. Constructs the Locker entity with the returning presigned uploading URLs and fields information, and stores it in the DynamoDB record of this Locker.
   5. Returns the JSON representation of the Locker entity.
 

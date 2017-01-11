@@ -11,16 +11,15 @@ from S3sh import S3sh
 from boto3.dynamodb.conditions import Key
 from functools import reduce
 
-# <Config>
+# <config: Configurations>
 session_expire_sec = 600
 download_link_expires_in_sec = 600
 default_locker_expires_in_sec = 3600
-default_locker_size = 5
 bucket = "undergrad"
 key_prefix = "FileDepot/"
 table = "FileDepot"
 salt = "OIT-FileDepot"
-# </Config>
+# </config>
 
 s3sh = S3sh(bucket, key_prefix)
 db = boto3.resource("dynamodb").Table(table)
@@ -33,6 +32,38 @@ def decimal_default(obj):
         return int(obj)
     raise TypeError
 
+def generate_conditions(expires_in_sec, package_request):
+    conditions = {"expires_in_sec": expires_in_sec}
+    if "type" in package_request and package_request["type"] is not None:
+        conditions["content_type"] = package_request["type"]
+    if "size_range" in package_request and package_request["size_range"] is not None:
+        conditions["content_length_range"] = package_request["size_range"]
+    return conditions
+
+def generate_packages(locker_key, expires_in_sec, package_requests):
+    packages = list()
+    for package_request in package_requests:
+        name = package_request.get("name", str(uuid.uuid4()))
+        upload_info = s3sh.presigned_post(
+                locker_key + name,
+                **generate_conditions(expires_in_sec, package_request))
+        upload_fields = upload_info["fields"]
+
+        if "type" in package_request:
+            upload_fields["Content-Type"] = package_request["type"]
+
+        packages.append({
+            "name": name,
+            "size": 0,
+            "type": package_request.get("type", None),
+            "size_range": package_request.get("size_range", None),
+            "download_url": None,
+            "download_url_expires": None,
+            "upload_url": upload_info["url"],
+            "upload_fields": upload_fields
+        })
+    return packages
+
 def make_session(uid):
     session_id = str(uuid.uuid4())
     sessions[session_id] = {
@@ -43,8 +74,8 @@ def make_session(uid):
 
 def make_uid(request):
     try:
-        json_data = request.get_json(force=True)
-        return hashlib.sha256((json_data["type"] + json_data["cred"]["id"] + salt).encode("utf-8")).hexdigest()
+        request_json = request.get_json(force=True)
+        return hashlib.sha256((request_json["type"] + request_json["cred"]["id"] + salt).encode("utf-8")).hexdigest()
     except:
         abort(400)
 
@@ -83,7 +114,6 @@ class Lockers(Resource):
     def post(self):
         session_id = get_session_id(request)
         uid = get_uid(session_id)
-
         try:
             while True:
                 locker_id = str(uuid.uuid4())
@@ -91,43 +121,16 @@ class Lockers(Resource):
                 if not s3sh.has(locker_key):
                     s3sh.touch(locker_key)
                     break
-
             request_json = request.get_json(force=True)
-            expires_in_sec = default_locker_expires_in_sec
-            if "expires_in_sec" in request_json:
-                expires_in_sec = request_json["expires_in_sec"]
-            expires = int(time.time()) + expires_in_sec
-
-            conditions = {
-                "expires_in_sec": expires_in_sec
-            }
-            if "content_type" in request_json:
-                conditions["content_type"] = request_json["content_type"]
-            if "content_length_range" in request_json:
-                conditions["content_length_range"] = request_json["content_length_range"]
-
-            size = default_locker_size
-            if "size" in request_json:
-                size = request_json["size"]
-
-            slots = dict()
-            for i in range(0, size):
-                slot_id = str(uuid.uuid4())
-                slots[slot_id] = s3sh.presigned_post(locker_key + slot_id, **conditions)
-
+            expires_in_sec = request_json.get("expires_in_sec", default_locker_expires_in_sec)
             locker_entity = {
                 "id": locker_id,
                 "uid": uid,
-                "expires": expires,
-                "size": size,
-                "space": size,
-                "policy": conditions,
-                "slots": slots,
-                "files": dict()
+                "expires": int(time.time()) + expires_in_sec,
+                "notes": request_json.get("notes", None),
+                "packages": generate_packages(locker_key, expires_in_sec, request_json["packages"])
             }
-
             db.put_item(Item = locker_entity)
-
             return locker_entity
         except:
             abort(400)
@@ -136,70 +139,67 @@ class Lockers(Resource):
         session_id = get_session_id(request, querystring = True)
         uid = get_uid(session_id)
 
-        # GET /lockers
+        # <list: GET /lockers>
         if not locker_id:
             try:
                 filters = list()
-                for condition in ["expires", "size", "space"]:
-                    if ("min_" + condition) in request.args:
-                        filters.append(Key(condition).gte(int(request.args["min_" + condition])))
-                    if ("max_" + condition) in request.args:
-                        filters.append(Key(condition).lte(int(request.args["max_" + condition])))
-
+                if "min_expires" in request.args:
+                    filters.append(Key("expires").gte(int(request.args["min_expires"])))
+                if "max_expires" in request.args:
+                    filters.append(Key("expires").lte(int(request.args["max_expires"])))
                 if filters:
                     lockers = db.query(
-                        IndexName='uid-index',
-                        KeyConditionExpression=Key('uid').eq(uid),
-                        ProjectionExpression = "id",
-                        FilterExpression = reduce(lambda a, b: a & b, filters)
+                            IndexName='uid-index',
+                            KeyConditionExpression=Key('uid').eq(uid),
+                            ProjectionExpression = "id",
+                            FilterExpression = reduce(lambda a, b: a & b, filters)
                     )["Items"]
                 else:
                     lockers = db.query(
-                        IndexName='uid-index',
-                        KeyConditionExpression=Key('uid').eq(uid),
-                        ProjectionExpression = "id"
+                            IndexName='uid-index',
+                            KeyConditionExpression=Key('uid').eq(uid),
+                            ProjectionExpression = "id"
                     )["Items"]
-
                 return list(map(lambda a: a["id"], json.loads(json.dumps(lockers, default=decimal_default))))
             except:
                 abort(400)
+        # </list>
 
-        # GET /lockers/:id
+        # <show: GET /lockers/:id>
         try:
             locker = db.query(
-                IndexName='id-uid-index',
-                KeyConditionExpression=Key('id').eq(locker_id) & Key('uid').eq(uid)
+                    IndexName='id-uid-index',
+                    KeyConditionExpression=Key('id').eq(locker_id) & Key('uid').eq(uid)
             )["Items"][0]
-
             locker = json.loads(json.dumps(locker, default=decimal_default))
+
+            package_dict = { locker["packages"][i]["name"] : i for i in range(0, len(locker["packages"])) }
 
             for item in s3sh.ls(locker["id"] + "/"):
                 fid = item["filename"]
-                if fid in locker["slots"]:
-                    del locker["slots"][fid]
-                    locker["files"][fid] = dict()
-                if fid in locker["files"]:
-                    locker["files"][fid]["size"] = item["size"]
-                    if "link" not in locker["files"][fid] or locker["files"][fid]["link_expires"] < int(time.time()):
-                        locker["files"][fid]["link_expires"] = int(time.time()) + download_link_expires_in_sec
-                        locker["files"][fid]["link"] = s3sh.presigned_url(item["key"], expires_in_sec=download_link_expires_in_sec)
+                if fid in package_dict:
+                    package = locker["packages"][package_dict[fid]]
+                    locker["packages"][package_dict[fid]]["size"] = item["size"]
+                    if package["download_url"] is None or package["download_url_expires"] < (int(time.time()) + download_link_expires_in_sec):
+                        locker["packages"][package_dict[fid]]["download_url"] = s3sh.presigned_url(item["key"], expires_in_sec=download_link_expires_in_sec)
+                        locker["packages"][package_dict[fid]]["download_url_expires"] = int(time.time()) + download_link_expires_in_sec
 
-            locker["space"] = locker["size"] - len(locker["files"])
             db.put_item(Item = locker)
             return locker
         except:
             abort(404)
+        # </show>
 
     def delete(self, locker_id):
         session_id = get_session_id(request)
         uid = get_uid(session_id)
         try:
             locker = db.query(
-                IndexName='id-uid-index',
-                KeyConditionExpression=Key('id').eq(locker_id) & Key('uid').eq(uid)
+                    IndexName='id-uid-index',
+                    KeyConditionExpression=Key('id').eq(locker_id) & Key('uid').eq(uid)
             )["Items"][0]
-            for key in locker["files"]:
-                s3sh.rm(locker["id"] + "/" + key)
+            keys = [ locker["id"] + "/" + package["name"] for package in locker["packages"] ]
+            s3sh.rm(*keys)
             s3sh.rm(locker["id"] + "/")
             db.delete_item(Key={"id": locker["id"]})
         except:
@@ -211,30 +211,27 @@ class Lockers(Resource):
         try:
             request_json = request.get_json(force=True)
             locker = db.query(
-                IndexName='id-uid-index',
-                KeyConditionExpression=Key('id').eq(locker_id) & Key('uid').eq(uid)
+                    IndexName='id-uid-index',
+                    KeyConditionExpression=Key('id').eq(locker_id) & Key('uid').eq(uid)
             )["Items"][0]
 
-            if "expires" in request_json:
-                extension_in_sec = request_json["expires"]["extension_in_sec"]
-                now = int(time.time())
-                if ("force" in request_json["expires"] and request_json["expires"]["force"] is True) or (locker["expires"] < now):
-                    conditions = locker["policy"]
-                    conditions["expires_in_sec"] = extension_in_sec
-                    locker["policy"] = conditions
-                    locker["expires"] = now + extension_in_sec
-                    for slot_id in locker["slots"]:
-                        locker["slots"][slot_id] = s3sh.presigned_post(locker["id"] + "/" + slot_id, **conditions)
+            now = int(time.time())
 
-            if "size" in request_json:
-                extension = request_json["size"]["extension"]
-                if ("force" in request_json["size"] and request_json["size"]["force"] is True) or (locker["space"] == 0):
-                    conditions = locker["policy"]
-                    for i in range(0, extension):
-                        slot_id = str(uuid.uuid4())
-                        locker["slots"][slot_id] = s3sh.presigned_post(locker["id"] + "/" + slot_id, **conditions)
-                    locker["size"] += extension
-                    locker["space"] += extension
+            if "extension_in_sec" in request_json:
+                extension_in_sec = request_json["extension_in_sec"]
+                locker["expires"] += extension_in_sec
+                for i in range(0, len(locker["packages"])):
+                    upload_info = s3sh.presigned_post(
+                            locker["id"] + "/" + locker["packages"][i]["name"],
+                            **generate_conditions(locker["expires"] - now, locker["packages"][i]))
+                    locker["packages"][i]["upload_url"] = upload_info["url"]
+                    locker["packages"][i]["upload_field"] = upload_info["fields"]
+
+            if "packages" in request_json:
+                locker["packages"] += generate_packages(locker_id + "/", locker["expires"] - now, request_json["packages"])
+
+            if "notes" in request_json:
+                locker["notes"] = request_json["notes"]
 
             db.put_item(Item = locker)
             locker = json.loads(json.dumps(locker, default=decimal_default))

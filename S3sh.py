@@ -24,10 +24,9 @@ class S3sh(object):
 
     def touch(self, key):
         return client.put_object(
-            Bucket = self.bucket,
-            Body = "",
-            Key = self.key_prefix + key
-        )
+                Bucket = self.bucket,
+                Body = "",
+                Key = self.key_prefix + key)
 
     def presigned_post(self, key, **kwargs):
         conditions = list()
@@ -35,15 +34,14 @@ class S3sh(object):
         if "content_length_range" in kwargs:
             conditions.append(["content-length-range", kwargs["content_length_range"][0], kwargs["content_length_range"][1]])
         if "content_type" in kwargs:
-            conditions.append(["starts-with", "$Content-Type", kwargs["content_type"]])
+            conditions.append({"Content-Type": kwargs["content_type"]})
         if "expires_in_sec" in kwargs:
             expires_in_sec = kwargs["expires_in_sec"]
         return client.generate_presigned_post(
-            Bucket = self.bucket,
-            Key = self.key_prefix + key,
-            Conditions = conditions,
-            ExpiresIn = expires_in_sec
-        )
+                Bucket = self.bucket,
+                Key = self.key_prefix + key,
+                Conditions = conditions,
+                ExpiresIn = int(expires_in_sec))
 
     def presigned_url(self, key, **kwargs):
         expires_in_sec = 300
@@ -63,7 +61,7 @@ class S3sh(object):
             yield {
                 "key": item.key[len(self.key_prefix) : ],
                 "filename": item.key[len(prefix) : ],
-                "size": item.size
+                "size": int(item.size)
             }
 
     def rm(self, *keys):
