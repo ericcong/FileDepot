@@ -22,29 +22,23 @@ In FileDepot's use case:
 - "Locker" represents a reservation that the App requests for the user to upload files.
 
 ## Locker Entity
-A locker can be represented as such an entity:
+A locker can be represented as such an entity (all fields are required except specified as optional):
 ```
 id (UUID, 32-bytes)
 uid (UUID, 32-bytes. The hashed user ID of the owner)
-expires (Integer, timestamp. The timestamp that the locker expires)
-size (Integer. The maximum number of files of the locker)
-space (Integer. The number of files that can be uploaded to the locker)
-policy:
-  content_type (String, optional. acceptable MIME types)
-  content_length_range (List of 2, optional. First element is min length, second is max length)
-  expires_in_sec (Integer, required. The lifetime of the locker)
-slots (Dict. Information about the free space of the locker): {
-  $key (String. Slot's key in S3 ): {
-    url (String. The uploading link)
-    fields (Dict. The uploading fields)
+expires (Integer, timestamp. The timestamp that the locker expires, i.e., all packages don't accept uploading.)
+notes (String, optional. Notes of this locker, e.g. the purpose of this locker)
+packages: [
+  {
+    name (String. The name of this package)
+    size (Integer. The size of this package)
+    type (String, optional. MIME-type of this package)
+    download_url (String, optional. The presigned downloading link)
+    download_url_expires (Integer, timestamp, optional. The timestamp that the download link expires)
+    upload_url (String. The presigned uploading link)
+    upload_fields (Dict. The uploading fields)
   }
-}
-files (Dict. Information about the uploaded files of the locker): {
-  $key (String. File's key in S3 ): {
-    size (Integer. Size in bytes)
-    link (String. The presigned downloading link)
-    link_expires (Integer, timestamp. The timestamp that the download link expires)
-}
+]
 ```
 
 ## API
@@ -62,14 +56,11 @@ cred: Dict. Cred information for login, different login types have different kin
   No Payload.
 
 ### Locker
-- `GET /lockers`: Returns the IDs of all lockers owned by the requesting App which have the specified range of expiration timestamp, size, or free space. Query format:
+- `GET /lockers`: Returns the IDs of all lockers owned by the requesting App which have the specified range of expiration timestamp.
+  Query format:
 ```
 min_expires: min expiration timestamp.
 max_expires: max expiration timestamp.
-min_size: min size.
-max_size: max size.
-min_space: min free space.
-max_space: max free space.
 ```
 
 - `GET /lockers/:id`: Returns the Locker entity if exists.
@@ -78,21 +69,27 @@ If the locker doesn't exist, then return status code of 404.
 - `POST /lockers`: Reserves a locker under the name of the requesting App, returns the Locker entity.
   Payload:
 ```
-size: Integer, optional, default as 5. The maximum number of files of the Locker.
-content_type: String, optional. The accepted type of the uploading files. Can be a MIME prefix like "image/".
-content_length_range: List of 2 Integers, optional. A pair of (min_length, max_length).
-expires_in_sec: Integer, optional, default as 3600. The number of seconds the Locker is valid for.
+expires_in_sec (Integer, optional, default as 3600. The number of seconds the Locker is valid for)
+notes (String, optional. The notes of this locker)
+packages: (Ordered list. Packages that should be in this locker) [
+  {
+    name (String. The name of this package)
+    type (String, optional. MIME-type of this package)
+  }
+]
 ```
 
-- `PUT /lockers/:id`: Extend the expiration time or the size of the locker.
+- `PUT /lockers/:id`: Extend the expiration time or the size of the locker, or change notes.
   Payload:
 ```
-expires:
-  force: Boolean, default as False. If True, then always extends the expiration time. If False, then only extends if the locker is expired.
-  extension_in_sec: Integer, optional, default as 300. The extension time in seconds.
-size:
-  force: Boolean, default as False. If True, then always extend the size. If False, then only extends if the locker is full.
-  extension: Integer, optional, default as 5. The extended size.
+extension_in_sec: Integer, optional, default as 300. The extension of expiration time in seconds.
+notes (String, optional. The notes of this locker)
+packages: (New packages that should be appended.) [
+  {
+    name (String. The name of this package)
+    type (String, optional. MIME-type of this package)
+  }
+]
 ```
   Returns the updated LockerEntity. If the locker doesn't exist, then return status code of 404.
 
@@ -105,26 +102,27 @@ The following describes the operations done in the storage backend when the APIs
 During the deployment, we should first specify a bucket in S3 for FileDepot to work on.
 In the following discussion we will use this bucket as the root, denoted as `/`.
 We also need a DynamoDB table, which records the states of Lockers, denoted as `db`.
+The DynamoDB table should have two indices: `id-uid-index`, and `uid-index`.
 
 - `POST /locker`:
   1. Generates a UUID denoted as `$uuid`, then creates the folder `/$uuid/`. Use `$uuid` as the Locker's ID.
   2. Creates the DynamoDB record for the Locker.
-  3. Say the size is `n`, then generate `n` UUIDs, denoted as `$fid`. Generate presigned POST of `/$uuid/$fid` for each `$fid`, with the conditions specified in the request.
+  3. Create package keys according to `package` list. Generate presigned POST for these keys, valid for `expires_in_sec` seconds. If `type` is specified, then set the meta data accordingly.
   4. Constructs the Locker entity with the returning presigned uploading URLs and fields information, and stores it in the DynamoDB record of this Locker.
   5. Returns the JSON representation of the Locker entity.
 
 - `PUT /lockers/:id`:
   1. Retrieve the DynamoDB record of Locker #`id` from `db`.
-  2. For extending expiration time: if `force == True`, then always extend expiration time; If `force == False`, then only extend when the locker expires. Compute the new expiration time by adding the current timestamp and the requested extension seconds. If the locker's expiration time is extended, then generate new presigned POST, otherwise not.
-  3. For extending size: if `force == True`, then always extend size, else only extend when the locker is full. Create new `$fid`s and their presigned POSTs.
+  2. If `extension_in_sec` is specified, then compute the new expiration time by adding the current timestamp and the requested extension seconds, and generate new presigned POST.
+  3. If `packages` is specified, then create the new keys and corresponding presigned POST which expires along with the other existing presigned POSTs, and append to `packages` list of the locker entity.
   4. Update and return the JSON representation of the Locker entity accordingly.
 
 - `GET /lockers/:id`:
   1. Looks up this Locker in the DynamoDB.
   2. Constructs the JSON representation of the Locker entity according to the record.
-  3. Check the files in `/$id/`, if any of them doesn't exist in the `files` dict, then create the presigned URL for it, and add it into the `files` dict. Then remove the corresponding `$fid` from `slots` dict. 
-  4. If any of the files' downloading link expires, then re-generate the presigned link, and update the Locker entity.
-  5. Returns the Locker entity.
+  3. Check the files in `/$id/`, if any of them doesn't have `download_url`, then create the presigned URL for it. 
+  4. If any of the files' downloading link expires, then re-generate the presigned link.
+  5. Update and return the Locker entity.
 
 - `DELETE /lockers/:id`:
   1. Deletes `/$id/`.
