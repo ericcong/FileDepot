@@ -7,6 +7,7 @@ import hashlib
 import boto3
 from flask import Flask, request
 from flask_restful import Resource, Api, abort
+from flask_cors import CORS
 from S3sh import S3sh
 from boto3.dynamodb.conditions import Key
 from functools import reduce
@@ -24,6 +25,7 @@ salt = "OIT-FileDepot"
 s3sh = S3sh(bucket, key_prefix)
 db = boto3.resource("dynamodb").Table(table)
 application = Flask(__name__)
+CORS(application)
 api = Api(application)
 sessions = dict()
 
