@@ -23,8 +23,8 @@ salt = "OIT-FileDepot"
 
 s3sh = S3sh(bucket, key_prefix)
 db = boto3.resource("dynamodb").Table(table)
-app = Flask(__name__)
-api = Api(app)
+application = Flask(__name__)
+api = Api(application)
 sessions = dict()
 
 def decimal_default(obj):
@@ -244,5 +244,4 @@ api.add_resource(Login, "/login")
 api.add_resource(Logout, "/logout")
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    application.run(port=5000)
