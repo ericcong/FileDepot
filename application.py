@@ -9,7 +9,7 @@ from flask import Flask, request
 from flask_restful import Resource, Api, abort
 from flask_cors import CORS
 from S3sh import S3sh
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Key, Attr
 from functools import reduce
 
 # <config: Configurations>
@@ -129,7 +129,7 @@ class Lockers(Resource):
                 "id": locker_id,
                 "uid": uid,
                 "expires": int(time.time()) + expires_in_sec,
-                "notes": request_json.get("notes", None),
+                "attributes": request_json.get("attributes", None),
                 "packages": generate_packages(locker_key, expires_in_sec, request_json["packages"])
             }
             db.put_item(Item = locker_entity)
@@ -146,9 +146,15 @@ class Lockers(Resource):
             try:
                 filters = list()
                 if "min_expires" in request.args:
-                    filters.append(Key("expires").gte(int(request.args["min_expires"])))
+                    filters.append(Attr("expires").gte(int(request.args["min_expires"])))
                 if "max_expires" in request.args:
-                    filters.append(Key("expires").lte(int(request.args["max_expires"])))
+                    filters.append(Attr("expires").lte(int(request.args["max_expires"])))
+                if "with_attributes" in request.args:
+                    for attr in request.args["with_attributes"]:
+                        filters.append(Attr("attributes").contains(attr))
+                if "without_attributes" in request.args:
+                    for attr in request.args["without_attributes"]:
+                        filters.append(~Attr("attributes").contains(attr))
                 if filters:
                     lockers = db.query(
                             IndexName='uid-index',
@@ -232,8 +238,8 @@ class Lockers(Resource):
             if "packages" in request_json:
                 locker["packages"] += generate_packages(locker_id + "/", locker["expires"] - now, request_json["packages"])
 
-            if "notes" in request_json:
-                locker["notes"] = request_json["notes"]
+            if "attributes" in request_json:
+                locker["attributes"] = request_json["attributes"]
 
             db.put_item(Item = locker)
             locker = json.loads(json.dumps(locker, default=decimal_default))

@@ -27,7 +27,7 @@ A locker can be represented as such an entity:
 id (UUID, 32-bytes)
 uid (UUID, 32-bytes. The hashed user ID of the owner)
 expires (Integer, timestamp. The timestamp that the locker expires, i.e., all packages don't accept uploading.)
-notes (String, default to be null. Notes of this locker, e.g. the purpose of this locker)
+attributes (String, default to be null. Attributes of this locker, e.g. the purpose of this locker, or whether the locker is sealed or pending.)
 packages: [
   {
     name (String. The name of this package)
@@ -57,11 +57,13 @@ cred: Dict. Cred information for login, different login types have different kin
   No Payload.
 
 ### Locker
-- `GET /lockers`: Returns the IDs of all lockers owned by the requesting App which have the specified range of expiration timestamp.
+- `GET /lockers`: Returns the IDs of all lockers owned by the requesting App which have the specified range of expiration timestamp, or specified attributes.
   Query format:
 ```
-min_expires: min expiration timestamp.
-max_expires: max expiration timestamp.
+min_expires: Integer. Min expiration timestamp.
+max_expires: Integer. Max expiration timestamp.
+with_attributes: List of Strings. The attributes that the returning lockers should have.
+without_attributes: List of Strings. The attributes that the returning lockers shouldn't have.
 ```
 
 - `GET /lockers/:id`: Returns the Locker entity if exists.
@@ -71,7 +73,7 @@ If the locker doesn't exist, then return status code of 404.
   Payload:
 ```
 expires_in_sec (Integer, optional, default as 3600. The number of seconds the Locker is valid for)
-notes (String, optional. The notes of this locker)
+attributes (String, optional. The attributes of this locker)
 packages: (Ordered list. Packages that should be in this locker) [
   {
     name (String, optional. The name of this package; will use UUID if not specified)
@@ -81,11 +83,11 @@ packages: (Ordered list. Packages that should be in this locker) [
 ]
 ```
 
-- `PUT /lockers/:id`: Extend the expiration time or the size of the locker, or change notes.
+- `PUT /lockers/:id`: Extend the expiration time or the size of the locker, or change attributes.
   Payload:
 ```
 extension_in_sec: Integer, optional, default as 300. The extension of expiration time in seconds.
-notes (String, optional. The notes of this locker)
+attributes (String, optional. The attributes of this locker)
 packages: (New packages that should be appended.) [
   {
     name (String, optional. The name of this package; will use UUID if not specified)
