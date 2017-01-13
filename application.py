@@ -145,15 +145,18 @@ class Lockers(Resource):
         if not locker_id:
             try:
                 filters = list()
-                if "min_expires" in request.args:
-                    filters.append(Attr("expires").gte(int(request.args["min_expires"])))
-                if "max_expires" in request.args:
-                    filters.append(Attr("expires").lte(int(request.args["max_expires"])))
-                if "with_attributes" in request.args:
-                    for attr in request.args["with_attributes"]:
+                request_args = request.args.to_dict(flat=False)
+                if "min_expires" in request_args:
+                    for e in request_args["min_expires"]:
+                        filters.append(Attr("expires").gte(int(e)))
+                if "max_expires" in request_args:
+                    for e in request_args["max_expires"]:
+                        filters.append(Attr("expires").lte(int(e)))
+                if "with_attributes" in request_args:
+                    for attr in request_args["with_attributes"]:
                         filters.append(Attr("attributes").contains(attr))
-                if "without_attributes" in request.args:
-                    for attr in request.args["without_attributes"]:
+                if "without_attributes" in request_args:
+                    for attr in request_args["without_attributes"]:
                         filters.append(~Attr("attributes").contains(attr))
                 if filters:
                     lockers = db.query(
@@ -252,4 +255,4 @@ api.add_resource(Login, "/login")
 api.add_resource(Logout, "/logout")
 
 if __name__ == '__main__':
-    application.run(port=5000)
+    application.run(host="0.0.0.0", port=5000)
