@@ -1,0 +1,9 @@
+<!doctype html>
+<title>FileDepot Demo - List Lockers</title>
+<h1>Lockers list</h1>
+{% for locker_id in locker_ids %}
+<div><a href="/locker/{{ locker_id }}"> {{ locker_id }} </a></div>
+{% endfor %}
+
+<hr />
+<a href="/upload">Upload</a>

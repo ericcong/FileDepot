@@ -1,0 +1,31 @@
+<html>
+  <head>
+    <script src="https://code.jquery.com/jquery-3.1.1.min.js" integrity="sha256-hVVnYaiADRTO2PzUGmuLJr8BLUSjGIZsDYGmIJLv2b8=" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mustache.js/2.3.0/mustache.js" integrity="sha256-XDU6Po3hKjdQXJHRrKrWlIF/E6y6BBgV5eiqZSYePpo=" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery-url-parser/2.3.1/purl.min.js" integrity="sha256-Ok1mfwLL3kRzz/1DUpgwsieObDr+pGVBAKaFxeyXeNk=" crossorigin="anonymous"></script>
+    <script src="toolbox.js"></script>
+<script>$(function(){
+locker_id = get_args()["locker_id"]
+$("#locker_id").html(locker_id)
+call_api("GET", "lockers/" + locker_id, {}, function(locker) {
+$("body").append(render("#template", {"locker": locker}))
+})
+})
+</script>
+  </head>
+  <body>
+    <h1> Locker #<span id="locker_id"></span> </h1>
+    <script id="template" type="text/template">
+{{#locker}}
+<div>Expires: {{expires}}</div>
+<div>Attributes: {{attributes}}</div>
+<div>Files:</div>
+<ol>
+{{#packages}}
+<li><a href="{{download_url}}">{{name}}</a> ({{size}} Bytes ; {{type}})</li>
+{{/packages}}
+</ol>
+{{/locker}}
+    </script>
+  </body>
+</html>

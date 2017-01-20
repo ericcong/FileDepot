@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+  <head>
+    <script src="https://code.jquery.com/jquery-3.1.1.min.js" integrity="sha256-hVVnYaiADRTO2PzUGmuLJr8BLUSjGIZsDYGmIJLv2b8=" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mustache.js/2.3.0/mustache.js" integrity="sha256-XDU6Po3hKjdQXJHRrKrWlIF/E6y6BBgV5eiqZSYePpo=" crossorigin="anonymous"></script>
+
+    <script>
+function add_file() {
+  $("#upload-form").prepend($("#file-input").html())
+}
+  </script>
+  </head>
+  <body>
+    <h1>Upload files</h1>
+    <form id="upload-form" method="POST" action="/preview" enctype="multipart/form-data">
+      <a href="#" onclick="add_file()">Add file</a>
+      <input type="submit" value="Preview" />
+    </form>
+    <script id="file-input" type="text/template">
+      <div style="margin: 10px"><input name="file" type="file" /></div>
+    </script>
+  </body>
+</html>

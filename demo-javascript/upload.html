@@ -1,0 +1,72 @@
+<html>
+  <head>
+    <script src="https://code.jquery.com/jquery-3.1.1.min.js" integrity="sha256-hVVnYaiADRTO2PzUGmuLJr8BLUSjGIZsDYGmIJLv2b8=" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mustache.js/2.3.0/mustache.js" integrity="sha256-XDU6Po3hKjdQXJHRrKrWlIF/E6y6BBgV5eiqZSYePpo=" crossorigin="anonymous"></script>
+    <script src="/toolbox.js"></script>
+<script>
+
+root = "http://lowcost-env.rsgwu3uhma.us-east-1.elasticbeanstalk.com/"
+
+function add_file() {
+  $("#upload-form").prepend($("#file-input").html())
+}
+
+locker_id = undefined
+
+function upload() {
+  if (locker_id != undefined) {
+    call_api("DELETE", "lockers/" + locker_id, {})
+    locker_id = undefined
+  }
+  upload_to_FileDepot("#upload-form", function(locker) {
+  locker_id = locker.id
+  call_api("GET", "lockers/" + locker.id, {}, function(locker){
+    $("#response").html(render("#success_msg", {locker_id: locker.id, packages: locker.packages}))
+  })
+  })
+}
+
+function delete_locker() {
+  if (locker_id != undefined) {
+    call_api("DELETE", "lockers/" + locker_id, {}, function() {
+      $("#response").html("Cancelled.")
+      locker_id = undefined
+    })
+  }
+}
+
+function seal_locker() {
+  if (locker_id != undefined) {
+    call_api("PUT", "lockers/" + locker_id, {"attributes": "sealed"}, function() {
+      $("#response").html("Submitted.")
+      locker_id = undefined
+    })
+  }
+}
+
+</script>
+
+  </head>
+<body>
+  <h1>Upload file</h1>
+  <form id="upload-form">
+    <button type="button" onclick="add_file()">Add file</button>
+    <button type="button" onclick="upload()">upload</button>
+  </form>
+  <div id="response"></div>
+  <script id="file-input" type="text/template">
+    <div style="margin: 10px"><input type="file" /></div>
+  </script>
+  <script id="success_msg" type="text/template">
+  <div>Files are uploaded to Locker #{{locker_id}}</div>
+  <ol>
+  {{#packages}}
+  <li><a href="{{download_url}}">{{name}}</a> ({{size}}) Bytes</li>
+  {{/packages}}
+  </ol>
+  <div>Submit?</div>
+  <button type="button" onclick="seal_locker()">Submit</button>
+  <button type="button" onclick="delete_locker()">Cancel</button>
+  </script>
+</body>
+</html>

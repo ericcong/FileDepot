@@ -1,0 +1,10 @@
+<!doctype html>
+<h1> Locker #{{ locker.id }} </h1>
+<div>Expires: {{ locker.expires }}</div>
+<div>Attributes: {{ locker.attributes }}</div>
+<div> Files: </div>
+<ol>
+  {% for package in locker.packages %}
+  <li><a href="/download/{{ locker.id }}/{{ package.name }}">{{ package.name }}</a> ({{ package.size }} Bytes ; {{ package.type }})</li>
+  {% endfor %}
+</ol>

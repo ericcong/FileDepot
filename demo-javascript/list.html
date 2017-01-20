@@ -1,0 +1,24 @@
+<html>
+  <head>
+    <script src="https://code.jquery.com/jquery-3.1.1.min.js" integrity="sha256-hVVnYaiADRTO2PzUGmuLJr8BLUSjGIZsDYGmIJLv2b8=" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mustache.js/2.3.0/mustache.js" integrity="sha256-XDU6Po3hKjdQXJHRrKrWlIF/E6y6BBgV5eiqZSYePpo=" crossorigin="anonymous"></script>
+    <script src="toolbox.js"></script>
+<script>$(function(){
+call_api("GET", "lockers", {"with_attributes": ["sealed"]}, function(locker_ids) {
+  console.log(locker_ids)
+  $("body").append(render("#template", {"locker_ids": locker_ids}))
+})
+})
+</script>
+  </head>
+  <body>
+    <h1> Lockers list </h1>
+    <script id="template" type="text/template">
+<ol>
+      {{#locker_ids}}
+      <li><a href="show.html?locker_id={{.}}">{{.}}</a></li>
+      {{/locker_ids}}
+<ol>
+    </script>
+  </body>
+</html>
