@@ -1,12 +1,135 @@
 <!DOCTYPE html>
-<html>
-    <head>
-        <title>Spring Security Example</title>
-    </head>
-    <body>
-        <h1>Welcome!</h1>
+<html >
 
-        <p>Click <a href="task">here</a> for a restful API (as admin).</p>
-        <p>Click <a href="hello">here</a> to say hello (as user).</p>
-    </body>
+<head>
+  <meta charset="UTF-8">
+  <title>FileDepot Demo</title>
+      
+  <style>
+		@import url("https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/3.3.7/css/bootstrap.min.css");		
+		.container { max-width: 768px; }
+		.header { margin: 6px 0 18px 0; }
+		.logo { 
+		  font-size: 200%; 
+		  font-weight: bold; 
+		}
+		.username, .logout { 
+		  float: right;
+		  margin: 12px;
+		}
+		.notes {
+		  margin: 12px 0;
+		}
+		input[type=file] {
+		  display: inline;
+		}
+		label {
+		  display: block;
+		  text-align: left;
+		}
+		form {
+		  margin: 36px auto;
+		}
+  </style>
+  
+</head>
+
+<body translate="no" >
+
+  <div class="container">
+  <div class="header">
+    <span class="logo">Demo Application</span>
+    <a href="#" class="logout">Logout</a>
+    <span class="username">Adam Messinger</span>
+  </div>
+  <p class="notes">Demo application is to show how to utilize file uploading service. Demo application is NOT part of the file uploading service project.</p>
+  <form id="upload-form">
+    <label for="">Application Fee Waiver:</label>
+    <input type="file" onchange="chooseFile()" />    
+    <a id="upload" disabled class="btn btn-primary btn-xs" onclick="uploadFile()">upload</a>
+  </form>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.1.1.min.js" integrity="sha256-hVVnYaiADRTO2PzUGmuLJr8BLUSjGIZsDYGmIJLv2b8=" crossorigin="anonymous"></script>
+
+<script>
+	$.ajaxSetup({ traditional: true });
+
+  function chooseFile() { $('#upload').removeAttr('disabled'); }
+	
+	function uploadFile() {  
+	  if ($('#upload').attr('disabled') != 'disabled') {
+	    $('#upload').attr('disabled', 'disabled');
+		  upload_to_FileDepot("#upload-form", "uploadfile", function(locker) {
+			  $(".container").append("<a href='viewfile?id="+locker.id+"' target='_blank'>File was uploaded as "+ locker.id +"</p>");
+			})
+	  }
+	}
+
+	// no need to change the code below
+
+	function upload_to_FileDepot(form_name, url, callback) {
+	  file_inputs = $(form_name + " input[type=file]")
+	  package_request = []
+	  for (i = 0; i < file_inputs.length; i++) {
+	    file_input = file_inputs[i].files[0]
+	    if (file_input != undefined) {
+	      package_request.push({"name": file_input.name, "type": file_input.type, "size_range": [file_input.size, file_input.size]})
+	    }
+	  }
+
+		api_request("POST", url, {"attributes": "pending", "packages": package_request}, function(locker) {
+	  	packages = locker.packages
+	  	unfinished = packages.length
+	  	for (i = 0; i < packages.length; i++) {
+	    	formData = new FormData()
+	    	for (field in packages[i].upload_fields) {
+	      	formData.append(field, packages[i].upload_fields[field])
+	    	}	    	
+	    	formData.append("file", file_inputs[i].files[0])
+	    	$.ajax({
+	      	url: packages[i].upload_url,
+	      	type: "POST",
+	      	data: formData,
+	      	cache: false,
+	      	contentType: false,
+	      	processData: false,
+	      	success: function(upload_response) {
+	        	unfinished -= 1
+	        	if (unfinished == 0 && callback != undefined) {
+	          	callback(locker)
+	        	}
+	      	}
+	    	})
+	  	}
+	  })
+	}
+
+	function api_request(raw_method, url, payload, success, error) {
+	  method = raw_method.toUpperCase()
+	  if (method != "GET") {
+	    payload = JSON.stringify(payload)
+	  }
+	  $.ajax({
+	    url: url,
+	    type: method,
+	    data: payload,
+	    contentType: 'application/json',
+	    dataType: 'json',
+	    success: function(data, textStatus, jqXHR) {
+	      if (success != undefined) {
+	        success(data, textStatus, jqXHR)
+	      }
+	    },
+	    error: function(jqXHR, textStatus, errorThrown) {
+	      if (error != undefined) {
+	        error(jqXHR, textStatus, errorThrown)
+	      }
+	    }
+	  })
+	}
+</script>
+
+</body>
 </html>
+ 
