@@ -5,12 +5,14 @@ import time
 import uuid
 import hashlib
 import boto3
+import requests
 from flask import Flask, request
 from flask_restful import Resource, Api, abort
 from flask_cors import CORS
 from S3sh import S3sh
 from boto3.dynamodb.conditions import Key, Attr
 from functools import reduce
+from jwt import JWT, jwk_from_dict
 
 # <config: Configurations>
 session_expire_sec = 600
@@ -20,6 +22,7 @@ bucket = "undergrad"
 key_prefix = "FileDepot/"
 table = "FileDepot"
 salt = "OIT-FileDepot"
+jwks_url = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_cGCwTohAM/.well-known/jwks.json"
 # </config>
 
 s3sh = S3sh(bucket, key_prefix)
@@ -28,6 +31,11 @@ application = Flask(__name__)
 CORS(application)
 api = Api(application)
 sessions = dict()
+
+jwt = JWT()
+jwks = list()
+for jwk_dict in requests.get(jwks_url).json()["keys"]:
+    jwks.append(jwk_from_dict(jwk_dict))
 
 def decimal_default(obj):
     if isinstance(obj, decimal.Decimal):
@@ -74,10 +82,30 @@ def make_session(uid):
     }
     return session_id
 
-def make_uid(request):
+def get_uid_from_jwt(jwt_string):
+    jwt_object = None
+    for jwk in jwks:
+        try:
+            jwt_object = jwt.decode(jwt_string, jwk)
+        except:
+            continue
+    if jwt_object and jwt_object["exp"] > time.time():
+        return jwt_object["client_id"]
+    else:
+        return None
+
+def login(request):
     try:
+        uid = None
         request_json = request.get_json(force=True)
-        return hashlib.sha256((request_json["type"] + request_json["cred"]["id"] + salt).encode("utf-8")).hexdigest()
+
+        if request_json["type"] == "cognito_jwt":
+            user_id = get_uid_from_jwt(request_json["cred"]["access_token"])
+            uid = user_id
+
+        if uid is None:
+            return None
+        return hashlib.sha256((request_json["type"] + uid + salt).encode("utf-8")).hexdigest()
     except:
         abort(400)
 
@@ -104,7 +132,9 @@ def get_session_id(request, **kwargs):
 
 class Login(Resource):
     def post(self):
-        uid = make_uid(request)
+        uid = login(request)
+        if uid is None:
+            abort(401)
         return {"session_id": make_session(uid)}
 
 class Logout(Resource):
