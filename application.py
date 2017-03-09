@@ -1,11 +1,11 @@
 import os
-import decimal
 import json
 import time
 import uuid
-import hashlib
 import boto3
 import requests
+from hashlib import sha256
+from base64 import b64decode
 from flask import Flask, request
 from flask_restful import Resource, Api, abort
 from flask_cors import CORS
@@ -13,139 +13,49 @@ from S3sh import S3sh
 from boto3.dynamodb.conditions import Key, Attr
 from functools import reduce
 from jwt import JWT, jwk_from_dict
+from FileDepot_helpers import *
 
 # <config: Configurations>
 session_expire_sec = 600
 download_link_expires_in_sec = 600
 default_locker_expires_in_sec = 3600
-bucket = "undergrad"
-key_prefix = "FileDepot/"
-table = "FileDepot"
 salt = "OIT-FileDepot"
-jwks_url = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_cGCwTohAM/.well-known/jwks.json"
 # </config>
 
+bucket = os.environ["FILEDEPOT_BUCKET"]
+key_prefix = os.environ["FILEDEPOT_KEY_PREFIX"]
+table_name = os.environ["FILEDEPOT_TABLE_NAME"]
+jwt_issuer = os.environ["FILEDEPOT_JWT_ISSUER"]
+
 s3sh = S3sh(bucket, key_prefix)
-db = boto3.resource("dynamodb").Table(table)
+db = boto3.resource("dynamodb").Table(table_name)
 application = Flask(__name__)
 CORS(application)
 api = Api(application)
-sessions = dict()
 
-jwt = JWT()
-jwks = list()
-for jwk_dict in requests.get(jwks_url).json()["keys"]:
-    jwks.append(jwk_from_dict(jwk_dict))
+jwt_lib = JWT()
+jwks = dict()
+for jwk_dict in requests.get(jwt_issuer + "/.well-known/jwks.json").json()["keys"]:
+    jwks[(jwk_dict["kid"], jwk_dict["alg"])] = jwk_from_dict(jwk_dict)
 
-def decimal_default(obj):
-    if isinstance(obj, decimal.Decimal):
-        return int(obj)
-    raise TypeError
-
-def generate_conditions(expires_in_sec, package_request):
-    conditions = {"expires_in_sec": expires_in_sec}
-    if "type" in package_request and package_request["type"] is not None:
-        conditions["content_type"] = package_request["type"]
-    if "size_range" in package_request and package_request["size_range"] is not None:
-        conditions["content_length_range"] = package_request["size_range"]
-    return conditions
-
-def generate_packages(locker_key, expires_in_sec, package_requests):
-    packages = list()
-    for package_request in package_requests:
-        name = package_request.get("name", str(uuid.uuid4()))
-        upload_info = s3sh.presigned_post(
-                locker_key + name,
-                **generate_conditions(expires_in_sec, package_request))
-        upload_fields = upload_info["fields"]
-
-        if "type" in package_request:
-            upload_fields["Content-Type"] = package_request["type"]
-
-        packages.append({
-            "name": name,
-            "size": 0,
-            "type": package_request.get("type", None),
-            "size_range": package_request.get("size_range", None),
-            "download_url": None,
-            "download_url_expires": None,
-            "upload_url": upload_info["url"],
-            "upload_fields": upload_fields
-        })
-    return packages
-
-def make_session(uid):
-    session_id = str(uuid.uuid4())
-    sessions[session_id] = {
-        "uid": uid,
-        "expires": int(time.time()) + session_expire_sec
-    }
-    return session_id
-
-def get_uid_from_jwt(jwt_string):
-    jwt_object = None
-    for jwk in jwks:
-        try:
-            jwt_object = jwt.decode(jwt_string, jwk)
-        except:
-            continue
-    if jwt_object and jwt_object["exp"] > time.time():
-        return jwt_object["client_id"]
+def get_uid(request):
+    try:
+        jwt_string = request.headers["FileDepot-jwt"]
+        key_info = json.loads(b64decode(jwt_string.split(".")[0] + "="))
+        jwk = jwks[(key_info["kid"], key_info["alg"])]
+        jwt_object = jwt_lib.decode(jwt_string, jwk)
+    except:
+        abort(400)
+    if (jwt_object 
+            and jwt_object["exp"] > time.time()
+            and jwt_object["iss"] == jwt_issuer):
+        return sha256((jwt_object["cognito:username"] + salt).encode("utf-8")).hexdigest()
     else:
-        return None
-
-def login(request):
-    try:
-        uid = None
-        request_json = request.get_json(force=True)
-
-        if request_json["type"] == "cognito_jwt":
-            user_id = get_uid_from_jwt(request_json["cred"]["access_token"])
-            uid = user_id
-
-        if uid is None:
-            return None
-        return hashlib.sha256((request_json["type"] + uid + salt).encode("utf-8")).hexdigest()
-    except:
-        abort(400)
-
-def get_uid(session_id):
-    if session_id not in sessions:
         abort(401)
-    session = sessions[session_id]
-    if session["expires"] <= int(time.time()):
-        del sessions[session_id]
-        abort(401)
-    return session["uid"]
-
-def delete_session(session_id):
-    del sessions[session_id]
-
-def get_session_id(request, **kwargs):
-    try:
-        if "querystring" in kwargs and kwargs["querystring"] is True:
-            return request.args["session_id"]
-        else:
-            return request.get_json(force=True)["session_id"]
-    except:
-        abort(400)
-
-class Login(Resource):
-    def post(self):
-        uid = login(request)
-        if uid is None:
-            abort(401)
-        return {"session_id": make_session(uid)}
-
-class Logout(Resource):
-    def post(self):
-        delete_session(get_session_id(request))
-        return {}
 
 class Lockers(Resource):
     def post(self):
-        session_id = get_session_id(request)
-        uid = get_uid(session_id)
+        uid = get_uid(request)
         try:
             while True:
                 locker_id = str(uuid.uuid4())
@@ -160,7 +70,7 @@ class Lockers(Resource):
                 "uid": uid,
                 "expires": int(time.time()) + expires_in_sec,
                 "attributes": request_json.get("attributes", None),
-                "packages": generate_packages(locker_key, expires_in_sec, request_json["packages"])
+                "packages": generate_packages(s3sh, locker_key, expires_in_sec, request_json["packages"])
             }
             db.put_item(Item = locker_entity)
             return locker_entity
@@ -168,8 +78,7 @@ class Lockers(Resource):
             abort(400)
 
     def get(self, locker_id=None):
-        session_id = get_session_id(request, querystring = True)
-        uid = get_uid(session_id)
+        uid = get_uid(request)
 
         # <list: GET /lockers>
         if not locker_id:
@@ -232,8 +141,7 @@ class Lockers(Resource):
         # </show>
 
     def delete(self, locker_id):
-        session_id = get_session_id(request)
-        uid = get_uid(session_id)
+        uid = get_uid(request)
         try:
             locker = db.query(
                     IndexName='id-uid-index',
@@ -247,8 +155,7 @@ class Lockers(Resource):
             abort(404)
 
     def put(self, locker_id):
-        session_id = get_session_id(request)
-        uid = get_uid(session_id)
+        uid = get_uid(request)
         try:
             request_json = request.get_json(force=True)
             locker = db.query(
@@ -269,7 +176,7 @@ class Lockers(Resource):
                     locker["packages"][i]["upload_field"] = upload_info["fields"]
 
             if "packages" in request_json:
-                locker["packages"] += generate_packages(locker_id + "/", locker["expires"] - now, request_json["packages"])
+                locker["packages"] += generate_packages(s3sh, locker_id + "/", locker["expires"] - now, request_json["packages"])
 
             if "attributes" in request_json:
                 locker["attributes"] = request_json["attributes"]
@@ -281,8 +188,6 @@ class Lockers(Resource):
             abort(400)
 
 api.add_resource(Lockers, "/lockers", "/lockers/<locker_id>")
-api.add_resource(Login, "/login")
-api.add_resource(Logout, "/logout")
 
 if __name__ == '__main__':
     application.run(host="0.0.0.0", port=5000)
