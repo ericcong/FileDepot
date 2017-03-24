@@ -61,6 +61,7 @@ def get_uid(request):
         jwt_object = jwt_lib.decode(jwt_string, jwk)
     except:
         abort(400)
+
     if (jwt_object 
             and jwt_object["exp"] > time.time()
             and jwt_object["iss"] == JWT_ISSUER):
@@ -73,10 +74,9 @@ def get_uid(request):
 class Lockers(Resource):
 
     # POST /lockers - create a locker, and return the JSON representation of the locker.
-    # If anything wrong happens, responds with error 400: Bad request.
-    #       This can be improved so that different exceptions have different error codes.
     def post(self):
         uid = get_uid(request)
+
         try:
             # Generate a UUID as locker ID, and create the corresponding object in S3.
             # The while loop is for ensuring no existing locker has the same ID.
@@ -86,10 +86,17 @@ class Lockers(Resource):
                 if not s3sh.has(locker_key):
                     s3sh.touch(locker_key)
                     break
+        except:
+            abort(500)
 
-            # Create the JSON representation of the locker, and store it in DynamoDB.
+        try:
             request_json = request.get_json(force=True)
+        except:
+            abort(400)
+
+        try:
             expires_in_sec = request_json.get("expires_in_sec", default_locker_expires_in_sec)
+            # Create the JSON representation of the locker, and store it in DynamoDB.
             locker_entity = {
                 "id": locker_id,
                 "uid": uid,
@@ -100,14 +107,12 @@ class Lockers(Resource):
             db.put_item(Item = locker_entity)
             return locker_entity
         except:
-            abort(400)
+            abort(500)
 
     def get(self, locker_id=None):
         uid = get_uid(request)
 
         # GET /lockers - query the current user's lockers with conditions. 
-        # If anything wrong happens, responds with error 404: Not found.
-        #       This can be improved so that different exceptions have different error codes.
         if not locker_id:
             try:
                 # Construct the DynamoDB query according to the request.
@@ -125,6 +130,10 @@ class Lockers(Resource):
                 if "without_attributes" in request_args:
                     for attr in request_args["without_attributes"]:
                         filters.append(~Attr("attributes").contains(attr))
+            except:
+                abort(400)
+
+            try:
                 if filters:
                     lockers = db.query(
                             IndexName='uid-index',
@@ -144,18 +153,25 @@ class Lockers(Resource):
                 # Returns the IDs of the satisfying lockers.
                 return list(map(lambda a: a["id"], json.loads(json.dumps(lockers, default=decimal_default))))
             except:
-                abort(400)
+                abort(500)
 
         # GET /lockers/:id - get the information of a specific locker.
-        # If anything wrong happens, responds with error 404: Not found.
-        #       This can be improved so that different exceptions have different error codes.
         try:
             # Query the locker from DynamoDB.
             # The locker must belong to the current user.
-            locker = db.query(
+            raw_locker_response = db.query(
                     IndexName='id-uid-index',
                     KeyConditionExpression=Key('id').eq(locker_id) & Key('uid').eq(uid)
-            )["Items"][0]
+            )
+        except:
+            abort(500)
+
+        try:
+            locker = raw_locker_response["Items"][0]
+        except:
+            abort(404)
+
+        try:
             locker = json.loads(json.dumps(locker, default=decimal_default))
 
             # Create a "filename to index" mapping, so that given a file name, we can know where to find its
@@ -177,20 +193,26 @@ class Lockers(Resource):
             db.put_item(Item = locker)
             return locker
         except:
-            abort(404)
+            abort(500)
 
     # DELETE /lockers/:id - delete a locker.
-    # If anything wrong happens, responds with error 404: Not found.
-    #       This can be improved so that different exceptions have different error codes.
     def delete(self, locker_id):
         uid = get_uid(request)
         try:
             # Find the locker
-            locker = db.query(
+            raw_locker_response = db.query(
                     IndexName='id-uid-index',
                     KeyConditionExpression=Key('id').eq(locker_id) & Key('uid').eq(uid)
-            )["Items"][0]
+            )
+        except:
+            abort(500)
 
+        try:
+            locker = raw_locker_response["Items"][0]
+        except:
+            abort(404)
+
+        try:
             # Construct the keys to its contents
             keys = [ locker["id"] + "/" + package["name"] for package in locker["packages"] ]
 
@@ -201,21 +223,31 @@ class Lockers(Resource):
             # Remove its record from DynamoDB.
             db.delete_item(Key={"id": locker["id"]})
         except:
-            abort(404)
+            abort(500)
 
     # PUT /lockers/:id - update a locker.
-    # If anything wrong happens, responds with error 404: Not found.
-    #       This can be improved so that different exceptions have different error codes.
     def put(self, locker_id):
         uid = get_uid(request)
         try:
             # Find the locker
-            request_json = request.get_json(force=True)
-            locker = db.query(
+            raw_locker_response = db.query(
                     IndexName='id-uid-index',
                     KeyConditionExpression=Key('id').eq(locker_id) & Key('uid').eq(uid)
-            )["Items"][0]
+            )
+        except:
+            abort(500)
 
+        try:
+            locker = raw_locker_response["Items"][0]
+        except:
+            abort(404)
+
+        try:
+            request_json = request.get_json(force=True)
+        except:
+            abort(400)
+
+        try:
             now = int(time.time())
 
             # Create new presigned-POST URLs for the files according to the extension time.
@@ -241,7 +273,7 @@ class Lockers(Resource):
             locker = json.loads(json.dumps(locker, default=decimal_default))
             return locker
         except:
-            abort(400)
+            abort(500)
 
 api.add_resource(Lockers, "/lockers", "/lockers/<locker_id>")
 
