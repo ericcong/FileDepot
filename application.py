@@ -17,7 +17,6 @@ from FileDepot_helpers import *
 
 
 # Configurations
-session_expire_sec = 600
 download_link_expires_in_sec = 600
 default_locker_expires_in_sec = 3600
 
@@ -56,7 +55,7 @@ for jwk_dict in requests.get(JWT_ISSUER + "/.well-known/jwks.json").json()["keys
 def get_uid(request):
     try:
         jwt_string = request.headers["FileDepot-jwt"]
-        key_info = json.loads(b64decode(jwt_string.split(".")[0] + "="))
+        key_info = json.loads(str(b64decode(jwt_string.split(".")[0] + "="), "utf-8"))
         jwk = jwks[(key_info["kid"], key_info["alg"])]
         jwt_object = jwt_lib.decode(jwt_string, jwk)
     except:
@@ -259,7 +258,7 @@ class Lockers(Resource):
                             locker["id"] + "/" + locker["packages"][i]["name"],
                             **generate_conditions(locker["expires"] - now, locker["packages"][i]))
                     locker["packages"][i]["upload_url"] = upload_info["url"]
-                    locker["packages"][i]["upload_field"] = upload_info["fields"]
+                    locker["packages"][i]["upload_fields"] = upload_info["fields"]
 
             # Add new packages to the current locker.
             if "packages" in request_json:
