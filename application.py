@@ -1,149 +1,120 @@
 import os
-import decimal
 import json
 import time
 import uuid
-import hashlib
 import boto3
+import requests
+from hashlib import sha256
+from base64 import b64decode
 from flask import Flask, request
 from flask_restful import Resource, Api, abort
 from flask_cors import CORS
 from S3sh import S3sh
 from boto3.dynamodb.conditions import Key, Attr
 from functools import reduce
+from jwt import JWT, jwk_from_dict
+from FileDepot_helpers import *
 
-# <config: Configurations>
-session_expire_sec = 600
+
+# Configurations
 download_link_expires_in_sec = 600
 default_locker_expires_in_sec = 3600
-bucket = "undergrad"
-key_prefix = "FileDepot/"
-table = "FileDepot"
-salt = "OIT-FileDepot"
-# </config>
 
-s3sh = S3sh(bucket, key_prefix)
-db = boto3.resource("dynamodb").Table(table)
+
+# Accept arguments from envionment variable
+BUCKET = os.environ["FILEDEPOT_BUCKET_NAME"]
+KEY_PREFIX = os.environ["FILEDEPOT_KEY_PREFIX"]
+TABLE_NAME = os.environ["FILEDEPOT_TABLE_NAME"]
+JWT_ISSUER = os.environ["FILEDEPOT_JWT_ISSUER"]
+PORT = os.environ.get("FILEDEPOT_PORT", 5000)
+SALT = os.environ.get("FILEDEPOT_SALT", "OIT-FileDepot")
+
+
+# Initilization of necessary tools
+s3sh = S3sh(BUCKET, KEY_PREFIX)
+db = boto3.resource("dynamodb").Table(TABLE_NAME)
 application = Flask(__name__)
 CORS(application)
 api = Api(application)
-sessions = dict()
+jwt_lib = JWT()
 
-def decimal_default(obj):
-    if isinstance(obj, decimal.Decimal):
-        return int(obj)
-    raise TypeError
 
-def generate_conditions(expires_in_sec, package_request):
-    conditions = {"expires_in_sec": expires_in_sec}
-    if "type" in package_request and package_request["type"] is not None:
-        conditions["content_type"] = package_request["type"]
-    if "size_range" in package_request and package_request["size_range"] is not None:
-        conditions["content_length_range"] = package_request["size_range"]
-    return conditions
+# Retrieve JWKs of our designated issuer from the issuer's "well-known URL".
+jwks = dict()
+for jwk_dict in requests.get(JWT_ISSUER + "/.well-known/jwks.json").json()["keys"]:
+    jwks[(jwk_dict["kid"], jwk_dict["alg"])] = jwk_from_dict(jwk_dict)
 
-def generate_packages(locker_key, expires_in_sec, package_requests):
-    packages = list()
-    for package_request in package_requests:
-        name = package_request.get("name", str(uuid.uuid4()))
-        upload_info = s3sh.presigned_post(
-                locker_key + name,
-                **generate_conditions(expires_in_sec, package_request))
-        upload_fields = upload_info["fields"]
 
-        if "type" in package_request:
-            upload_fields["Content-Type"] = package_request["type"]
-
-        packages.append({
-            "name": name,
-            "size": 0,
-            "type": package_request.get("type", None),
-            "size_range": package_request.get("size_range", None),
-            "download_url": None,
-            "download_url_expires": None,
-            "upload_url": upload_info["url"],
-            "upload_fields": upload_fields
-        })
-    return packages
-
-def make_session(uid):
-    session_id = str(uuid.uuid4())
-    sessions[session_id] = {
-        "uid": uid,
-        "expires": int(time.time()) + session_expire_sec
-    }
-    return session_id
-
-def make_uid(request):
+# This function is used for extracting UID from the request, with the following steps:
+# (1) It extracts the JWT string from the "FileDepot-jwt" field of the request header.
+#       If the field doesn't exist, then responds with error 400: Bad request.
+# (2) If the JWT is issued by our designated issuer, and is not expired, then 
+#       extract the username from "cognito:username".
+#       Otherwise responds with error 401: Unauthorized.
+# (3) Salt the username, then return its hash as the UID.
+def get_uid(request):
     try:
-        request_json = request.get_json(force=True)
-        return hashlib.sha256((request_json["type"] + request_json["cred"]["id"] + salt).encode("utf-8")).hexdigest()
+        jwt_string = request.headers["FileDepot-jwt"]
+        key_info = json.loads(str(b64decode(jwt_string.split(".")[0] + "="), "utf-8"))
+        jwk = jwks[(key_info["kid"], key_info["alg"])]
+        jwt_object = jwt_lib.decode(jwt_string, jwk)
     except:
         abort(400)
 
-def get_uid(session_id):
-    if session_id not in sessions:
+    if (jwt_object 
+            and jwt_object["exp"] > time.time()
+            and jwt_object["iss"] == JWT_ISSUER):
+        return sha256((jwt_object["cognito:username"] + SALT).encode("utf-8")).hexdigest()
+    else:
         abort(401)
-    session = sessions[session_id]
-    if session["expires"] <= int(time.time()):
-        del sessions[session_id]
-        abort(401)
-    return session["uid"]
 
-def delete_session(session_id):
-    del sessions[session_id]
 
-def get_session_id(request, **kwargs):
-    try:
-        if "querystring" in kwargs and kwargs["querystring"] is True:
-            return request.args["session_id"]
-        else:
-            return request.get_json(force=True)["session_id"]
-    except:
-        abort(400)
-
-class Login(Resource):
-    def post(self):
-        uid = make_uid(request)
-        return {"session_id": make_session(uid)}
-
-class Logout(Resource):
-    def post(self):
-        delete_session(get_session_id(request))
-        return {}
-
+# Main router.
 class Lockers(Resource):
+
+    # POST /lockers - create a locker, and return the JSON representation of the locker.
     def post(self):
-        session_id = get_session_id(request)
-        uid = get_uid(session_id)
+        uid = get_uid(request)
+
         try:
+            # Generate a UUID as locker ID, and create the corresponding object in S3.
+            # The while loop is for ensuring no existing locker has the same ID.
             while True:
                 locker_id = str(uuid.uuid4())
                 locker_key = locker_id + "/"
                 if not s3sh.has(locker_key):
                     s3sh.touch(locker_key)
                     break
+        except:
+            abort(500)
+
+        try:
             request_json = request.get_json(force=True)
+        except:
+            abort(400)
+
+        try:
             expires_in_sec = request_json.get("expires_in_sec", default_locker_expires_in_sec)
+            # Create the JSON representation of the locker, and store it in DynamoDB.
             locker_entity = {
                 "id": locker_id,
                 "uid": uid,
                 "expires": int(time.time()) + expires_in_sec,
                 "attributes": request_json.get("attributes", None),
-                "packages": generate_packages(locker_key, expires_in_sec, request_json["packages"])
+                "packages": generate_packages(s3sh, locker_key, expires_in_sec, request_json["packages"])
             }
             db.put_item(Item = locker_entity)
             return locker_entity
         except:
-            abort(400)
+            abort(500)
 
     def get(self, locker_id=None):
-        session_id = get_session_id(request, querystring = True)
-        uid = get_uid(session_id)
+        uid = get_uid(request)
 
-        # <list: GET /lockers>
+        # GET /lockers - query the current user's lockers with conditions. 
         if not locker_id:
             try:
+                # Construct the DynamoDB query according to the request.
                 filters = list()
                 request_args = request.args.to_dict(flat=False)
                 if "min_expires" in request_args:
@@ -158,6 +129,10 @@ class Lockers(Resource):
                 if "without_attributes" in request_args:
                     for attr in request_args["without_attributes"]:
                         filters.append(~Attr("attributes").contains(attr))
+            except:
+                abort(400)
+
+            try:
                 if filters:
                     lockers = db.query(
                             IndexName='uid-index',
@@ -165,27 +140,47 @@ class Lockers(Resource):
                             ProjectionExpression = "id",
                             FilterExpression = reduce(lambda a, b: a & b, filters)
                     )["Items"]
+
                 else:
+                    # If there is no query condition, then return all lockers.
                     lockers = db.query(
                             IndexName='uid-index',
                             KeyConditionExpression=Key('uid').eq(uid),
                             ProjectionExpression = "id"
                     )["Items"]
+
+                # Returns the IDs of the satisfying lockers.
                 return list(map(lambda a: a["id"], json.loads(json.dumps(lockers, default=decimal_default))))
             except:
-                abort(400)
-        # </list>
+                abort(500)
 
-        # <show: GET /lockers/:id>
+        # GET /lockers/:id - get the information of a specific locker.
         try:
-            locker = db.query(
+            # Query the locker from DynamoDB.
+            # The locker must belong to the current user.
+            raw_locker_response = db.query(
                     IndexName='id-uid-index',
                     KeyConditionExpression=Key('id').eq(locker_id) & Key('uid').eq(uid)
-            )["Items"][0]
+            )
+        except:
+            abort(500)
+
+        try:
+            locker = raw_locker_response["Items"][0]
+        except:
+            abort(404)
+
+        try:
             locker = json.loads(json.dumps(locker, default=decimal_default))
 
+            # Create a "filename to index" mapping, so that given a file name, we can know where to find its
+            #       metadata in locker["packages"].
             package_dict = { locker["packages"][i]["name"] : i for i in range(0, len(locker["packages"])) }
 
+            # Enumerate all existing files in the current locker's S3 virtual directory.
+            # Ignore the files without metadata, because this implies that these files are not uploaded
+            #       throught FileDepot API.
+            # Generate a download URL for each valid file, then construct response with these URLs.
             for item in s3sh.ls(locker["id"] + "/"):
                 fid = item["filename"]
                 if fid in package_dict:
@@ -194,40 +189,67 @@ class Lockers(Resource):
                     if package["download_url"] is None or package["download_url_expires"] < (int(time.time()) + download_link_expires_in_sec):
                         locker["packages"][package_dict[fid]]["download_url"] = s3sh.presigned_url(item["key"], expires_in_sec=download_link_expires_in_sec)
                         locker["packages"][package_dict[fid]]["download_url_expires"] = int(time.time()) + download_link_expires_in_sec
-
             db.put_item(Item = locker)
             return locker
         except:
-            abort(404)
-        # </show>
+            abort(500)
 
+    # DELETE /lockers/:id - delete a locker.
     def delete(self, locker_id):
-        session_id = get_session_id(request)
-        uid = get_uid(session_id)
+        uid = get_uid(request)
         try:
-            locker = db.query(
+            # Find the locker
+            raw_locker_response = db.query(
                     IndexName='id-uid-index',
                     KeyConditionExpression=Key('id').eq(locker_id) & Key('uid').eq(uid)
-            )["Items"][0]
-            keys = [ locker["id"] + "/" + package["name"] for package in locker["packages"] ]
-            s3sh.rm(*keys)
-            s3sh.rm(locker["id"] + "/")
-            db.delete_item(Key={"id": locker["id"]})
+            )
+        except:
+            abort(500)
+
+        try:
+            locker = raw_locker_response["Items"][0]
         except:
             abort(404)
 
-    def put(self, locker_id):
-        session_id = get_session_id(request)
-        uid = get_uid(session_id)
         try:
-            request_json = request.get_json(force=True)
-            locker = db.query(
+            # Construct the keys to its contents
+            keys = [ locker["id"] + "/" + package["name"] for package in locker["packages"] ]
+
+            # Remove the files and the virtual directory from S3.
+            s3sh.rm(*keys)
+            s3sh.rm(locker["id"] + "/")
+
+            # Remove its record from DynamoDB.
+            db.delete_item(Key={"id": locker["id"]})
+        except:
+            abort(500)
+
+    # PUT /lockers/:id - update a locker.
+    def put(self, locker_id):
+        uid = get_uid(request)
+        try:
+            # Find the locker
+            raw_locker_response = db.query(
                     IndexName='id-uid-index',
                     KeyConditionExpression=Key('id').eq(locker_id) & Key('uid').eq(uid)
-            )["Items"][0]
+            )
+        except:
+            abort(500)
 
+        try:
+            locker = raw_locker_response["Items"][0]
+        except:
+            abort(404)
+
+        try:
+            request_json = request.get_json(force=True)
+        except:
+            abort(400)
+
+        try:
             now = int(time.time())
 
+            # Create new presigned-POST URLs for the files according to the extension time.
             if "extension_in_sec" in request_json:
                 extension_in_sec = request_json["extension_in_sec"]
                 locker["expires"] += extension_in_sec
@@ -236,11 +258,13 @@ class Lockers(Resource):
                             locker["id"] + "/" + locker["packages"][i]["name"],
                             **generate_conditions(locker["expires"] - now, locker["packages"][i]))
                     locker["packages"][i]["upload_url"] = upload_info["url"]
-                    locker["packages"][i]["upload_field"] = upload_info["fields"]
+                    locker["packages"][i]["upload_fields"] = upload_info["fields"]
 
+            # Add new packages to the current locker.
             if "packages" in request_json:
-                locker["packages"] += generate_packages(locker_id + "/", locker["expires"] - now, request_json["packages"])
+                locker["packages"] += generate_packages(s3sh, locker_id + "/", locker["expires"] - now, request_json["packages"])
 
+            # Update the locker's attribtues.
             if "attributes" in request_json:
                 locker["attributes"] = request_json["attributes"]
 
@@ -248,11 +272,9 @@ class Lockers(Resource):
             locker = json.loads(json.dumps(locker, default=decimal_default))
             return locker
         except:
-            abort(400)
+            abort(500)
 
 api.add_resource(Lockers, "/lockers", "/lockers/<locker_id>")
-api.add_resource(Login, "/login")
-api.add_resource(Logout, "/logout")
 
 if __name__ == '__main__':
-    application.run(host="0.0.0.0", port=5000)
+    application.run(host="0.0.0.0", port=PORT)
