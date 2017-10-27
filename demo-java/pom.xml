@@ -40,7 +40,7 @@
     </properties>
 
     <!-- TODO: generate war for tomcat -->
-    <!-- <packaging>war</packaging> -->
+    <packaging>war</packaging>
 
     <!-- You can add other Maven repo here -->
     <build>
